@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "CoupleApp",
+    "slug": "couple-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "ios": {
+      "bundleIdentifier": "com.tuempresa.coupleapp",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrar la distancia con tu pareja y avisar cuando llegas a un lugar guardado.",
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para calcular la distancia con tu pareja.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "remote-notification"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.tuempresa.coupleapp",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      "expo-location",
+      "expo-task-manager",
+      "expo-status-bar"
+    ]
+  }
+}
