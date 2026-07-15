@@ -1,61 +1,79 @@
-import React, { useEffect, useState } from 'react';
-import { View, FlatList, TextInput, TouchableOpacity, Text, StyleSheet } from 'react-native';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../context/AuthContext';
-import { useCouple } from '../context/CoupleContext';
-import { sendLove } from '../services/streakService';
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
+import { useAppContext } from "../contexts/AppContext";
+import { watchMessages, sendMessage, sendLoveTap } from "../services/chatService";
+import { watchStreak } from "../services/streakService";
+import { ChatMessage, Couple } from "../types";
 
 export default function ChatScreen() {
-  const { userProfile } = useAuth();
-  const { couple } = useCouple();
-  const [messages, setMessages] = useState([]);
-  const [text, setText] = useState('');
+  const { userId, couple } = useAppContext();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [streak, setStreak] = useState<Couple["streak"] | null>(null);
+  const [text, setText] = useState("");
 
   useEffect(() => {
-    if (!couple?.id) return;
-    const q = query(collection(db, 'couples', couple.id, 'messages'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsub;
+    if (!couple) return;
+    return watchMessages(couple.id, setMessages);
   }, [couple?.id]);
 
-  async function handleSend() {
+  useEffect(() => {
+    if (!couple) return;
+    return watchStreak(couple.id, setStreak);
+  }, [couple?.id]);
+
+  if (!couple || !userId) return null;
+
+  function handleSend() {
     if (!text.trim()) return;
-    await addDoc(collection(db, 'couples', couple.id, 'messages'), {
-      senderId: userProfile.id,
-      type: 'text',
-      text,
-      createdAt: serverTimestamp(),
-    });
-    setText('');
+    sendMessage(couple!.id, userId!, text.trim());
+    setText("");
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.streakHeader}>
-        <Text style={styles.streakText}>🔥 {couple?.streak?.count || 0} días seguidos</Text>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <View style={styles.streakBar}>
+        <Text style={styles.streakText}>🔥 Racha de amor: {streak?.count ?? 0} días</Text>
+        <TouchableOpacity onPress={() => sendLoveTap(couple.id, userId)}>
+          <Text style={styles.loveTapButton}>💜 Enviar amor</Text>
+        </TouchableOpacity>
       </View>
 
       <FlatList
         data={messages}
-        inverted
         keyExtractor={(item) => item.id}
+        style={styles.list}
         renderItem={({ item }) => (
-          <View style={[styles.bubble, item.senderId === userProfile.id ? styles.mine : styles.theirs]}>
-            <Text style={styles.bubbleText}>{item.text}</Text>
+          <View
+            style={[
+              styles.bubble,
+              item.senderId === userId ? styles.bubbleMine : styles.bubbleTheirs,
+            ]}
+          >
+            <Text
+              style={[
+                styles.bubbleText,
+                item.senderId === userId && { color: "#fff" },
+              ]}
+            >
+              {item.loveTap ? "💜" : item.text}
+            </Text>
           </View>
         )}
       />
 
-      <View style={styles.inputRow}>
-        <TouchableOpacity
-          style={styles.loveButton}
-          onPress={() => sendLove(couple.id, userProfile.id, couple)}
-        >
-          <Text>❤️</Text>
-        </TouchableOpacity>
+      <View style={styles.inputBar}>
         <TextInput
           style={styles.input}
           value={text}
@@ -63,23 +81,31 @@ export default function ChatScreen() {
           placeholder="Escribe un mensaje..."
         />
         <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-          <Text style={{ color: 'white' }}>Enviar</Text>
+          <Text style={styles.sendButtonText}>Enviar</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  streakHeader: { padding: 10, backgroundColor: '#FFEDEE', alignItems: 'center' },
-  streakText: { fontWeight: '700', color: '#8A2846' },
-  bubble: { margin: 6, padding: 10, borderRadius: 12, maxWidth: '75%' },
-  mine: { alignSelf: 'flex-end', backgroundColor: '#D6336C' },
-  theirs: { alignSelf: 'flex-start', backgroundColor: '#EEE' },
-  bubbleText: { color: '#000' },
-  inputRow: { flexDirection: 'row', padding: 8, alignItems: 'center' },
-  loveButton: { marginRight: 6, padding: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#DDD', borderRadius: 20, paddingHorizontal: 12 },
-  sendButton: { marginLeft: 6, backgroundColor: '#D6336C', padding: 10, borderRadius: 20 },
+  container: { flex: 1, backgroundColor: "#fff" },
+  streakBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#FFF0F3",
+  },
+  streakText: { fontWeight: "700", color: "#333" },
+  loveTapButton: { fontWeight: "700", color: "#FF6B81" },
+  list: { flex: 1, paddingHorizontal: 12 },
+  bubble: { maxWidth: "75%", borderRadius: 16, padding: 10, marginVertical: 4 },
+  bubbleMine: { backgroundColor: "#FF6B81", alignSelf: "flex-end" },
+  bubbleTheirs: { backgroundColor: "#eee", alignSelf: "flex-start" },
+  bubbleText: { color: "#000" },
+  inputBar: { flexDirection: "row", padding: 12, borderTopWidth: 1, borderColor: "#eee" },
+  input: { flex: 1, borderWidth: 1, borderColor: "#ddd", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
+  sendButton: { justifyContent: "center", marginLeft: 8 },
+  sendButtonText: { color: "#FF6B81", fontWeight: "700" },
 });

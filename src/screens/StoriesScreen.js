@@ -1,71 +1,79 @@
-import React, { useEffect, useState } from 'react';
-import { View, FlatList, Image, TouchableOpacity, StyleSheet, Text } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { db, storage } from '../firebase/config';
-import { useAuth } from '../context/AuthContext';
-import { useCouple } from '../context/CoupleContext';
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  Image,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+} from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { useAppContext } from "../contexts/AppContext";
+import { watchActiveStories, uploadStory } from "../services/storiesService";
+import { Story } from "../types";
 
 export default function StoriesScreen() {
-  const { userProfile } = useAuth();
-  const { couple } = useCouple();
-  const [stories, setStories] = useState([]);
+  const { userId, couple } = useAppContext();
+  const [stories, setStories] = useState<Story[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    if (!couple?.id) return;
-    const q = query(collection(db, 'couples', couple.id, 'stories'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const now = Date.now();
-      setStories(
-        snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((s) => !s.expiresAt || s.expiresAt.toMillis() > now)
-      );
-    });
-    return unsub;
+    if (!couple) return;
+    return watchActiveStories(couple.id, setStories);
   }, [couple?.id]);
 
-  async function handlePickImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images });
-    if (result.canceled) return;
+  async function handleAddStory() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
 
-    const response = await fetch(result.assets[0].uri);
-    const blob = await response.blob();
-    const filename = `stories/${couple.id}/${Date.now()}.jpg`;
-    const storageRef = ref(storage, filename);
-    await uploadBytes(storageRef, blob);
-    const imageUrl = await getDownloadURL(storageRef);
-
-    const expiresAt = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
-    await addDoc(collection(db, 'couples', couple.id, 'stories'), {
-      authorId: userProfile.id,
-      imageUrl,
-      createdAt: serverTimestamp(),
-      expiresAt,
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
     });
+    if (result.canceled || !couple || !userId) return;
+
+    setUploading(true);
+    try {
+      await uploadStory(couple.id, userId, result.assets[0].uri);
+    } finally {
+      setUploading(false);
+    }
   }
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity style={styles.addButton} onPress={handlePickImage}>
-        <Text style={styles.addButtonText}>+ Nueva historia</Text>
+      <TouchableOpacity style={styles.addButton} onPress={handleAddStory} disabled={uploading}>
+        <Text style={styles.addButtonText}>
+          {uploading ? "Subiendo..." : "+ Añadir historia"}
+        </Text>
       </TouchableOpacity>
+
       <FlatList
         data={stories}
-        horizontal
         keyExtractor={(item) => item.id}
+        numColumns={2}
+        contentContainerStyle={styles.grid}
         renderItem={({ item }) => (
-          <Image source={{ uri: item.imageUrl }} style={styles.thumbnail} />
+          <View style={styles.storyCard}>
+            <Image source={{ uri: item.imageUrl }} style={styles.storyImage} />
+            <Text style={styles.storyAuthor}>
+              {item.authorId === userId ? "Tú" : "Tu pareja"}
+            </Text>
+          </View>
         )}
+        ListEmptyComponent={<Text style={styles.empty}>No hay historias activas.</Text>}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 12 },
-  addButton: { backgroundColor: '#D6336C', padding: 10, borderRadius: 20, alignItems: 'center', marginBottom: 10 },
-  addButtonText: { color: 'white', fontWeight: '600' },
-  thumbnail: { width: 90, height: 140, borderRadius: 10, marginRight: 8 },
+  container: { flex: 1, backgroundColor: "#fff", padding: 12 },
+  addButton: { backgroundColor: "#FF6B81", borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 12 },
+  addButtonText: { color: "#fff", fontWeight: "700" },
+  grid: { gap: 8 },
+  storyCard: { flex: 1, margin: 4, borderRadius: 12, overflow: "hidden" },
+  storyImage: { width: "100%", aspectRatio: 1, borderRadius: 12 },
+  storyAuthor: { textAlign: "center", marginTop: 4, color: "#666", fontSize: 12 },
+  empty: { textAlign: "center", marginTop: 40, color: "#999" },
 });

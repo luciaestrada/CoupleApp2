@@ -1,52 +1,99 @@
-import React, { useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet } from 'react-native';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+} from "react-native";
+import { useAppContext } from "../contexts/AppContext";
+import { setMyStatus, watchStatus } from "../services/statusService";
+import { StatusMessage } from "../types";
 
-const EMOJIS = ['😍', '😴', '😅', '😤', '🥳', '😢', '🤒', '💪'];
+const QUICK_EMOJIS = ["😍", "😴", "🥰", "😢", "🤒", "🎉", "😤", "🥹"];
 
 export default function StatusScreen() {
-  const { userProfile } = useAuth();
-  const [text, setText] = useState(userProfile?.status?.text || '');
-  const [emoji, setEmoji] = useState(userProfile?.status?.emoji || '😍');
+  const { userId, couple, partnerId } = useAppContext();
+  const [text, setText] = useState("");
+  const [emoji, setEmoji] = useState<string | undefined>();
+  const [myStatus, setMyStatusState] = useState<StatusMessage | null>(null);
+  const [partnerStatus, setPartnerStatus] = useState<StatusMessage | null>(null);
 
-  async function handleSave() {
-    await updateDoc(doc(db, 'users', userProfile.id), {
-      status: { text, emoji, updatedAt: serverTimestamp() },
-    });
+  useEffect(() => {
+    if (!couple || !userId) return;
+    return watchStatus(couple.id, userId, setMyStatusState);
+  }, [couple?.id, userId]);
+
+  useEffect(() => {
+    if (!couple || !partnerId) return;
+    return watchStatus(couple.id, partnerId, setPartnerStatus);
+  }, [couple?.id, partnerId]);
+
+  async function handlePublish() {
+    if (!couple || !userId) return;
+    await setMyStatus(couple.id, userId, text.trim(), emoji);
+    setText("");
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.bigEmoji}>{emoji}</Text>
+      <Text style={styles.sectionTitle}>Estado de tu pareja</Text>
+      <View style={styles.partnerCard}>
+        {partnerStatus ? (
+          <Text style={styles.partnerText}>
+            {partnerStatus.emoji} {partnerStatus.text}
+          </Text>
+        ) : (
+          <Text style={styles.empty}>Sin estado activo</Text>
+        )}
+      </View>
+
+      <Text style={styles.sectionTitle}>Tu estado</Text>
+      {myStatus && (
+        <Text style={styles.currentStatus}>
+          Actual: {myStatus.emoji} {myStatus.text}
+        </Text>
+      )}
+
       <View style={styles.emojiRow}>
-        {EMOJIS.map((e) => (
-          <TouchableOpacity key={e} onPress={() => setEmoji(e)}>
-            <Text style={styles.emojiOption}>{e}</Text>
+        {QUICK_EMOJIS.map((e) => (
+          <TouchableOpacity
+            key={e}
+            style={[styles.emojiButton, emoji === e && styles.emojiSelected]}
+            onPress={() => setEmoji(e)}
+          >
+            <Text style={styles.emojiText}>{e}</Text>
           </TouchableOpacity>
         ))}
       </View>
+
       <TextInput
         style={styles.input}
+        placeholder="Escribe una frase corta..."
+        maxLength={60}
         value={text}
         onChangeText={setText}
-        placeholder="¿Cómo estás?"
-        maxLength={40}
       />
-      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-        <Text style={styles.saveText}>Guardar estado</Text>
+
+      <TouchableOpacity style={styles.publishButton} onPress={handlePublish}>
+        <Text style={styles.publishButtonText}>Publicar estado (24h)</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, alignItems: 'center' },
-  bigEmoji: { fontSize: 60, marginBottom: 12 },
-  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginBottom: 16 },
-  emojiOption: { fontSize: 30, margin: 6 },
-  input: { borderWidth: 1, borderColor: '#DDD', borderRadius: 10, width: '100%', padding: 10, marginBottom: 16 },
-  saveButton: { backgroundColor: '#D6336C', padding: 12, borderRadius: 20, width: '100%', alignItems: 'center' },
-  saveText: { color: 'white', fontWeight: '600' },
+  container: { flex: 1, padding: 16, backgroundColor: "#fff" },
+  sectionTitle: { fontSize: 14, fontWeight: "700", color: "#333", marginTop: 12, marginBottom: 8 },
+  partnerCard: { backgroundColor: "#FFF0F3", borderRadius: 12, padding: 16 },
+  partnerText: { fontSize: 18 },
+  empty: { color: "#999" },
+  currentStatus: { color: "#666", marginBottom: 8 },
+  emojiRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  emojiButton: { padding: 8, borderRadius: 10, borderWidth: 1, borderColor: "#ddd" },
+  emojiSelected: { borderColor: "#FF6B81", backgroundColor: "#FFF0F3" },
+  emojiText: { fontSize: 22 },
+  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 12, padding: 14, fontSize: 16, marginBottom: 12 },
+  publishButton: { backgroundColor: "#FF6B81", borderRadius: 12, padding: 16, alignItems: "center" },
+  publishButtonText: { color: "#fff", fontWeight: "700" },
 });

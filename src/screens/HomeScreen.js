@@ -1,59 +1,104 @@
-import React, { useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Text, RefreshControl } from 'react-native';
-import { onSnapshot, collection, doc } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../context/AuthContext';
-import { useCouple } from '../context/CoupleContext';
-import { sendLove } from '../services/streakService';
-import { updateMyLocation, calculateDistanceKm } from '../services/distanceService';
-import StreakBadge from '../components/StreakBadge';
-import DistanceCard from '../components/DistanceCard';
-import DaysCounter from '../components/DaysCounter';
+import React, { useEffect, useState } from "react";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { useAppContext } from "../contexts/AppContext";
+import { watchStreak } from "../services/streakService";
+import { sendLoveTap } from "../services/chatService";
+import {
+  startLocationHeartbeat,
+  watchUserLocation,
+} from "../services/locationService";
+import { haversineDistanceKm } from "../utils/haversine";
+import { daysTogether, isStreakBroken } from "../utils/dateUtils";
+import { Couple } from "../types";
+
+type Coords = { lat: number; lng: number };
 
 export default function HomeScreen() {
-  const { userProfile } = useAuth();
-  const { couple } = useCouple();
-  const [locations, setLocations] = useState({});
+  const { userId, couple, partnerId } = useAppContext();
+  const [streak, setStreak] = useState<Couple["streak"] | null>(null);
+  const [myCoords, setMyCoords] = useState<Coords | null>(null);
+  const [partnerCoords, setPartnerCoords] = useState<Coords | null>(null);
 
   useEffect(() => {
-    if (!couple?.id) return;
-    const unsub = onSnapshot(collection(db, 'couples', couple.id, 'locations'), (snap) => {
-      const next = {};
-      snap.forEach((d) => (next[d.id] = d.data()));
-      setLocations(next);
-    });
-    return unsub;
+    if (!couple) return;
+    return watchStreak(couple.id, setStreak);
   }, [couple?.id]);
 
+  // Publica mi ubicación periódicamente
   useEffect(() => {
-    if (!couple?.id || !userProfile?.id) return;
-    updateMyLocation(couple.id, userProfile.id);
-    const interval = setInterval(() => updateMyLocation(couple.id, userProfile.id), 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [couple?.id, userProfile?.id]);
+    if (!userId) return;
+    return startLocationHeartbeat(userId);
+  }, [userId]);
 
-  if (!couple) return <View style={styles.container} />;
+  // Escucha mi propia ubicación publicada (para tener el mismo dato que ve la pareja)
+  useEffect(() => {
+    if (!userId) return;
+    return watchUserLocation(userId, (lat, lng) => setMyCoords({ lat, lng }));
+  }, [userId]);
 
-  const [uidA, uidB] = couple.members;
-  const distanceKm = calculateDistanceKm(locations[uidA], locations[uidB]);
-  const sentToday = false; // derivar comparando streak.lastSentByX con la fecha de hoy
+  // Escucha la ubicación de la pareja
+  useEffect(() => {
+    if (!partnerId) return;
+    return watchUserLocation(partnerId, (lat, lng) => setPartnerCoords({ lat, lng }));
+  }, [partnerId]);
+
+  const distanceKm =
+    myCoords && partnerCoords
+      ? haversineDistanceKm(myCoords.lat, myCoords.lng, partnerCoords.lat, partnerCoords.lng)
+      : null;
+
+  if (!couple) {
+    return (
+      <View style={styles.container}>
+        <Text>Todavía no estás emparejado/a.</Text>
+      </View>
+    );
+  }
+
+  const broken = isStreakBroken(streak?.lastConfirmedDay ?? null);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <DaysCounter startDate={couple.startDate?.toDate?.()} />
-      <View style={styles.row}>
-        <DistanceCard distanceKm={distanceKm} />
-        <StreakBadge
-          count={couple.streak?.count || 0}
-          sentToday={sentToday}
-          onSendLove={() => sendLove(couple.id, userProfile.id, couple)}
-        />
+    <View style={styles.container}>
+      <Text style={styles.daysCounter}>
+        💞 {daysTogether(couple.startDate)} días juntos
+      </Text>
+
+      <View style={styles.card}>
+        <Text style={styles.cardLabel}>Racha de amor</Text>
+        <Text style={styles.streakNumber}>
+          🔥 {streak?.count ?? 0} {broken ? "(rota)" : ""}
+        </Text>
+        <TouchableOpacity
+          style={styles.loveButton}
+          onPress={() => userId && sendLoveTap(couple.id, userId)}
+        >
+          <Text style={styles.loveButtonText}>Enviar amor de hoy 💜</Text>
+        </TouchableOpacity>
       </View>
-    </ScrollView>
+
+      <View style={styles.card}>
+        <Text style={styles.cardLabel}>Distancia</Text>
+        <Text style={styles.distanceText}>
+          {distanceKm !== null ? `${distanceKm.toFixed(1)} km` : "Calculando..."}
+        </Text>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, alignItems: 'center' },
-  row: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginTop: 16 },
+  container: { flex: 1, padding: 20, backgroundColor: "#fff" },
+  daysCounter: { fontSize: 20, fontWeight: "700", textAlign: "center", marginBottom: 20, color: "#FF6B81" },
+  card: {
+    backgroundColor: "#FFF0F3",
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    alignItems: "center",
+  },
+  cardLabel: { fontSize: 14, color: "#888", marginBottom: 8 },
+  streakNumber: { fontSize: 32, fontWeight: "800", marginBottom: 12 },
+  loveButton: { backgroundColor: "#FF6B81", borderRadius: 12, paddingVertical: 12, paddingHorizontal: 20 },
+  loveButtonText: { color: "#fff", fontWeight: "700" },
+  distanceText: { fontSize: 28, fontWeight: "800" },
 });
