@@ -12,12 +12,11 @@ import {
 import { useAppContext } from "../contexts/AppContext";
 import { watchMessages, sendMessage, sendLoveTap } from "../services/chatService";
 import { watchStreak } from "../services/streakService";
-import { ChatMessage, Couple } from "../types";
 
 export default function ChatScreen() {
   const { userId, couple } = useAppContext();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streak, setStreak] = useState<Couple["streak"] | null>(null);
+  const [messages, setMessages] = useState([]);
+  const [streak, setStreak] = useState(null);
   const [text, setText] = useState("");
 
   useEffect(() => {
@@ -34,7 +33,7 @@ export default function ChatScreen() {
 
   function handleSend() {
     if (!text.trim()) return;
-    sendMessage(couple!.id, userId!, text.trim());
+    sendMessage(couple.id, userId, text.trim());
     setText("");
   }
 

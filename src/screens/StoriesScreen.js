@@ -10,11 +10,10 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useAppContext } from "../contexts/AppContext";
 import { watchActiveStories, uploadStory } from "../services/storiesService";
-import { Story } from "../types";
 
 export default function StoriesScreen() {
   const { userId, couple } = useAppContext();
-  const [stories, setStories] = useState<Story[]>([]);
+  const [stories, setStories] = useState([]);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {

@@ -1,37 +1,79 @@
-import React, { useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, FlatList } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as Location from 'expo-location';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../context/AuthContext';
-import { useCouple } from '../context/CoupleContext';
-import { requestLocationPermissions, } from '../services/distanceService';
+import { useAppContext } from '../contexts/AppContext';
+import { requestLocationPermissions } from '../services/distanceService';
 import { registerGeofences } from '../services/locationTask';
+import { supabase } from '../supabase/client';
+
+function normalizeGeofence(geofence) {
+  return {
+    id: geofence.id,
+    name: geofence.name,
+    lat: geofence.lat,
+    lng: geofence.lng,
+    radiusMeters: geofence.radius_meters,
+  };
+}
 
 export default function GeofenceSetupScreen() {
-  const { userProfile } = useAuth();
-  const { couple } = useCouple();
+  const { userId, couple } = useAppContext();
   const [name, setName] = useState('');
-  const [places, setPlaces] = useState([]); // { name, lat, lng, radiusMeters }
+  const [places, setPlaces] = useState([]);
+
+  useEffect(() => {
+    if (!couple?.id || !userId) return undefined;
+    let active = true;
+
+    async function loadPlaces() {
+      const { data, error } = await supabase
+        .from('geofences')
+        .select('*')
+        .eq('couple_id', couple.id)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      const nextPlaces = (data || []).map(normalizeGeofence);
+      if (active) setPlaces(nextPlaces);
+    }
+
+    loadPlaces().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, [couple?.id, userId]);
 
   async function handleAddCurrentLocation() {
-    if (!name.trim()) return;
-    const granted = await requestLocationPermissions();
-    if (!granted) return;
+    if (!name.trim() || !couple?.id || !userId) return;
+    try {
+      const granted = await requestLocationPermissions();
+      if (!granted) {
+        Alert.alert('Permiso necesario', 'Activa la ubicación en segundo plano para usar lugares.');
+        return;
+      }
 
-    const loc = await Location.getCurrentPositionAsync({});
-    const newPlace = {
-      name,
-      lat: loc.coords.latitude,
-      lng: loc.coords.longitude,
-      radiusMeters: 150,
-    };
-    const updated = [...places, newPlace];
-    setPlaces(updated);
-    setName('');
+      const location = await Location.getCurrentPositionAsync({});
+      const { data, error } = await supabase
+        .from('geofences')
+        .insert({
+          couple_id: couple.id,
+          user_id: userId,
+          name: name.trim(),
+          lat: location.coords.latitude,
+          lng: location.coords.longitude,
+          radius_meters: 150,
+        })
+        .select()
+        .single();
+      if (error) throw error;
 
-    await setDoc(doc(db, 'couples', couple.id, 'geofences', userProfile.id), { places: updated });
-    await registerGeofences(updated, couple.id, userProfile.id);
+      const updatedPlaces = [...places, normalizeGeofence(data)];
+      setPlaces(updatedPlaces);
+      setName('');
+      await registerGeofences(updatedPlaces, couple.id, userId);
+    } catch (error) {
+      Alert.alert('Error', error?.message || 'No se pudo guardar el lugar');
+    }
   }
 
   return (
@@ -39,7 +81,7 @@ export default function GeofenceSetupScreen() {
       <Text style={styles.hint}>Ve al lugar (casa, trabajo...) y guárdalo con el nombre que quieras.</Text>
       <FlatList
         data={places}
-        keyExtractor={(item) => item.name}
+        keyExtractor={(item) => item.id}
         renderItem={({ item }) => <Text style={styles.item}>📍 {item.name}</Text>}
       />
       <TextInput style={styles.input} placeholder="Nombre del lugar (ej. Casa)" value={name} onChangeText={setName} />

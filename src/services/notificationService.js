@@ -1,10 +1,11 @@
 import * as Notifications from 'expo-notifications';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { supabase } from '../supabase/client';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -14,7 +15,16 @@ export async function registerForPushNotifications(userId) {
   const { status } = await Notifications.requestPermissionsAsync();
   if (status !== 'granted') return null;
 
-  const token = (await Notifications.getExpoPushTokenAsync()).data;
-  await updateDoc(doc(db, 'users', userId), { expoPushToken: token });
-  return token;
+  try {
+    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    const { error } = await supabase
+      .from('profiles')
+      .update({ expo_push_token: token })
+      .eq('id', userId);
+    if (error) throw error;
+    return token;
+  } catch (error) {
+    console.warn('No se pudo registrar el token de notificaciones:', error);
+    return null;
+  }
 }

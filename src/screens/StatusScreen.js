@@ -8,16 +8,15 @@ import {
 } from "react-native";
 import { useAppContext } from "../contexts/AppContext";
 import { setMyStatus, watchStatus } from "../services/statusService";
-import { StatusMessage } from "../types";
 
 const QUICK_EMOJIS = ["😍", "😴", "🥰", "😢", "🤒", "🎉", "😤", "🥹"];
 
 export default function StatusScreen() {
   const { userId, couple, partnerId } = useAppContext();
   const [text, setText] = useState("");
-  const [emoji, setEmoji] = useState<string | undefined>();
-  const [myStatus, setMyStatusState] = useState<StatusMessage | null>(null);
-  const [partnerStatus, setPartnerStatus] = useState<StatusMessage | null>(null);
+  const [emoji, setEmoji] = useState();
+  const [myStatus, setMyStatusState] = useState(null);
+  const [partnerStatus, setPartnerStatus] = useState(null);
 
   useEffect(() => {
     if (!couple || !userId) return;

@@ -1,32 +1,58 @@
 import React, { useEffect, useState } from 'react';
-import { View, FlatList, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { collection, addDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useCouple } from '../context/CoupleContext';
+import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useAppContext } from '../contexts/AppContext';
+import { supabase } from '../supabase/client';
 
 export default function SpecialDatesScreen() {
-  const { couple } = useCouple();
+  const { couple, userId } = useAppContext();
   const [dates, setDates] = useState([]);
   const [title, setTitle] = useState('');
-  const [dateInput, setDateInput] = useState(''); // formato YYYY-MM-DD
+  const [dateInput, setDateInput] = useState('');
 
   useEffect(() => {
-    if (!couple?.id) return;
-    const unsub = onSnapshot(collection(db, 'couples', couple.id, 'specialDates'), (snap) => {
-      setDates(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsub;
+    if (!couple?.id) return undefined;
+    let active = true;
+
+    async function loadDates() {
+      const { data, error } = await supabase
+        .from('special_dates')
+        .select('*')
+        .eq('couple_id', couple.id)
+        .order('date', { ascending: true });
+      if (error) throw error;
+      if (active) setDates(data || []);
+    }
+
+    loadDates().catch(console.error);
+    const channel = supabase
+      .channel(`special-dates-${couple.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'special_dates', filter: `couple_id=eq.${couple.id}` },
+        () => loadDates().catch(console.error)
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
   }, [couple?.id]);
 
   async function handleAdd() {
-    if (!title || !dateInput) return;
-    await addDoc(collection(db, 'couples', couple.id, 'specialDates'), {
-      title,
-      date: new Date(dateInput),
+    if (!title.trim() || !dateInput || !couple?.id || !userId) return;
+    const { error } = await supabase.from('special_dates').insert({
+      couple_id: couple.id,
+      created_by: userId,
+      title: title.trim(),
+      date: dateInput,
       recurring: true,
-      notifyDaysBefore: 3,
-      createdAt: serverTimestamp(),
+      notify_days_before: 3,
     });
+    if (error) {
+      Alert.alert('Error', error.message);
+      return;
+    }
     setTitle('');
     setDateInput('');
   }
@@ -39,7 +65,9 @@ export default function SpecialDatesScreen() {
         renderItem={({ item }) => (
           <View style={styles.item}>
             <Text style={styles.itemTitle}>{item.title}</Text>
-            <Text style={styles.itemDate}>{new Date(item.date.toDate?.() || item.date).toLocaleDateString()}</Text>
+            <Text style={styles.itemDate}>
+              {new Date(`${item.date}T00:00:00`).toLocaleDateString()}
+            </Text>
           </View>
         )}
       />

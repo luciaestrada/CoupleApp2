@@ -9,15 +9,12 @@ import {
 } from "../services/locationService";
 import { haversineDistanceKm } from "../utils/haversine";
 import { daysTogether, isStreakBroken } from "../utils/dateUtils";
-import { Couple } from "../types";
-
-type Coords = { lat: number; lng: number };
 
 export default function HomeScreen() {
   const { userId, couple, partnerId } = useAppContext();
-  const [streak, setStreak] = useState<Couple["streak"] | null>(null);
-  const [myCoords, setMyCoords] = useState<Coords | null>(null);
-  const [partnerCoords, setPartnerCoords] = useState<Coords | null>(null);
+  const [streak, setStreak] = useState(null);
+  const [myCoords, setMyCoords] = useState(null);
+  const [partnerCoords, setPartnerCoords] = useState(null);
 
   useEffect(() => {
     if (!couple) return;
