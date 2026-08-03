@@ -6,22 +6,23 @@ import { AppState } from 'react-native';
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-if (!supabaseUrl || !supabasePublishableKey) {
-  throw new Error(
-    'Faltan EXPO_PUBLIC_SUPABASE_URL o EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY en el archivo .env'
-  );
-}
+export const supabaseConfigurationError =
+  !supabaseUrl || !supabasePublishableKey
+    ? 'Faltan EXPO_PUBLIC_SUPABASE_URL o EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY.'
+    : null;
 
-export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
-  auth: {
-    storage: globalThis.localStorage,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-});
+export const supabase = supabaseConfigurationError
+  ? null
+  : createClient(supabaseUrl, supabasePublishableKey, {
+      auth: {
+        storage: globalThis.localStorage,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    });
 
-if (!globalThis.__coupleAppSupabaseRefreshListener) {
+if (supabase && !globalThis.__coupleAppSupabaseRefreshListener) {
   globalThis.__coupleAppSupabaseRefreshListener = AppState.addEventListener('change', (state) => {
     if (state === 'active') {
       supabase.auth.startAutoRefresh();

@@ -182,3 +182,18 @@
 {"_e":"metro:bundling:started","_t":1784483043048,"id":"2","platform":"android","environment":null,"entry":"node_modules\\expo\\AppEntry.js"}
 {"_e":"metro:bundling:progress","_t":1784483043049,"id":"2","progress":0,"total":1,"current":0}
 {"_e":"metro:bundling:done","_t":1784483043090,"id":"2","total":1,"ms":41.7415}
+{"_e":"root:init","_t":1784897289614,"format":"v0-jsonl","version":"57.0.6"}
+{"_e":"env:mode","_t":1784897289616,"nodeEnv":"development","babelEnv":"development","mode":"development"}
+{"_e":"env:load","_t":1784897289623,"mode":"development","files":["../..\\..\\.env"],"env":{"EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY":"sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS","EXPO_PUBLIC_SUPABASE_URL":"https://supabase.pruebahomelab.es"}}
+{"_e":"devserver:start","_t":1784897291098,"mode":"development","web":true,"baseUrl":"","asyncRoutes":false,"routerRoot":"../..\\..\\app","serverComponents":false,"serverActions":false,"serverRendering":false,"apiRoutes":false,"exporting":false}
+{"_e":"metro:config","_t":1784897292167,"serverRoot":"../..\\..","projectRoot":"../..\\..","exporting":false,"flags":{"autolinkingModuleResolution":false,"serverActions":false,"serverComponents":false,"reactCompiler":false,"optimizeGraph":false,"treeshaking":false,"logbox":false}}
+{"_e":"expo:dev-tools-plugin:load","_t":1784897292563,"plugins":[{"packageName":"expo-sqlite","bannerTitle":"expo-sqlite","cliBanner":false,"webpageEndpoint":"/_expo/plugins/expo-sqlite"}]}
+{"_e":"metro:instantiate","_t":1784897305242,"atlas":false,"workers":14,"host":"::","port":8081}
+{"_e":"root:init","_t":1784897432826,"format":"v0-jsonl","version":"57.0.6"}
+{"_e":"env:mode","_t":1784897432829,"nodeEnv":"development","babelEnv":"development","mode":"development"}
+{"_e":"env:load","_t":1784897432839,"mode":"development","files":["../..\\..\\.env"],"env":{"EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY":"sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS","EXPO_PUBLIC_SUPABASE_URL":"https://supabase.pruebahomelab.es"}}
+{"_e":"devserver:start","_t":1784897434217,"mode":"development","web":true,"baseUrl":"","asyncRoutes":false,"routerRoot":"../..\\..\\app","serverComponents":false,"serverActions":false,"serverRendering":false,"apiRoutes":false,"exporting":false}
+{"_e":"metro:config","_t":1784897435372,"serverRoot":"../..\\..","projectRoot":"../..\\..","exporting":false,"flags":{"autolinkingModuleResolution":false,"serverActions":false,"serverComponents":false,"reactCompiler":false,"optimizeGraph":false,"treeshaking":false,"logbox":false}}
+{"_e":"expo:dev-tools-plugin:load","_t":1784897436078,"plugins":[{"packageName":"expo-sqlite","bannerTitle":"expo-sqlite","cliBanner":false,"webpageEndpoint":"/_expo/plugins/expo-sqlite"}]}
+{"_e":"metro:instantiate","_t":1784897474541,"atlas":false,"workers":14,"host":"::","port":8081}
+{"_e":"metro:client_log","_t":1784897557680,"level":"error","data":["Project is incompatible with this version of Expo Go\n\nThe project you requested requires a newer version of Expo Go.\n\nHow to fix this error:\n\nDownload the latest version of Expo Go from the App Store."]}

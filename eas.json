@@ -1,0 +1,33 @@
+{
+  "cli": {
+    "version": ">= 21.2.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://supabase.pruebahomelab.es",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://supabase.pruebahomelab.es",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://supabase.pruebahomelab.es",
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
