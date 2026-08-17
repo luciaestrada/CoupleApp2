@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TextInput,
@@ -9,33 +10,54 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
-import { useAppContext } from "../contexts/AppContext";
-import { watchMessages, sendMessage, sendLoveTap } from "../services/chatService";
-import { watchStreak } from "../services/streakService";
+import { usePairedAppContext } from '../contexts/AppContext';
+import { sendMessage, watchMessages } from '../services/chatService';
+import { sendLove, watchStreaks } from '../services/streakService';
+import { todayInMadrid } from '../utils/dateUtils';
 
 export default function ChatScreen() {
-  const { userId, couple } = useAppContext();
+  const { userId, partnerId, couple } = usePairedAppContext();
   const [messages, setMessages] = useState([]);
-  const [streak, setStreak] = useState(null);
+  const [streaks, setStreaks] = useState(couple.streaks ?? []);
   const [text, setText] = useState("");
+  const [error, setError] = useState(null);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (!couple) return;
-    return watchMessages(couple.id, setMessages);
-  }, [couple?.id]);
+    return watchMessages(couple.id, { onData: setMessages, onError: setError });
+  }, [couple.id]);
 
   useEffect(() => {
-    if (!couple) return;
-    return watchStreak(couple.id, setStreak);
-  }, [couple?.id]);
+    return watchStreaks(couple.id, { onData: setStreaks, onError: setError });
+  }, [couple.id]);
 
-  if (!couple || !userId) return null;
-
-  function handleSend() {
+  async function handleSend() {
     if (!text.trim()) return;
-    sendMessage(couple.id, userId, text.trim());
-    setText("");
+    setSending(true);
+    setError(null);
+    try {
+      await sendMessage(couple.id, text);
+      setText('');
+    } catch (nextError) {
+      setError(nextError);
+    } finally {
+      setSending(false);
+    }
   }
+
+  async function handleSendLove() {
+    setError(null);
+    try {
+      await sendLove(couple.id);
+    } catch (nextError) {
+      setError(nextError);
+    }
+  }
+
+  const myStreak = streaks.find((streak) => streak.userId === userId)?.count ?? 0;
+  const partnerStreak = streaks.find((streak) => streak.userId === partnerId)?.count ?? 0;
+  const sentLoveToday =
+    streaks.find((streak) => streak.userId === userId)?.lastConfirmedDay === todayInMadrid();
 
   return (
     <KeyboardAvoidingView
@@ -43,14 +65,19 @@ export default function ChatScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.streakBar}>
-        <Text style={styles.streakText}>🔥 Racha de amor: {streak?.count ?? 0} días</Text>
-        <TouchableOpacity onPress={() => sendLoveTap(couple.id, userId)}>
-          <Text style={styles.loveTapButton}>💜 Enviar amor</Text>
+        <Text style={styles.streakText}>🔥 Tú {myStreak} · Pareja {partnerStreak}</Text>
+        <TouchableOpacity disabled={sentLoveToday} onPress={handleSendLove}>
+          <Text style={[styles.loveTapButton, sentLoveToday && styles.disabledText]}>
+            {sentLoveToday ? '✓ Enviado hoy' : '💜 Enviar amor'}
+          </Text>
         </TouchableOpacity>
       </View>
 
+      {error && <Text style={styles.error}>{error.message}</Text>}
+
       <FlatList
         data={messages}
+        inverted
         keyExtractor={(item) => item.id}
         style={styles.list}
         renderItem={({ item }) => (
@@ -77,10 +104,15 @@ export default function ChatScreen() {
           style={styles.input}
           value={text}
           onChangeText={setText}
+          maxLength={2000}
           placeholder="Escribe un mensaje..."
         />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-          <Text style={styles.sendButtonText}>Enviar</Text>
+        <TouchableOpacity disabled={sending} style={styles.sendButton} onPress={handleSend}>
+          {sending ? (
+            <ActivityIndicator color="#FF6B81" />
+          ) : (
+            <Text style={styles.sendButtonText}>Enviar</Text>
+          )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -98,6 +130,7 @@ const styles = StyleSheet.create({
   },
   streakText: { fontWeight: "700", color: "#333" },
   loveTapButton: { fontWeight: "700", color: "#FF6B81" },
+  disabledText: { color: '#888' },
   list: { flex: 1, paddingHorizontal: 12 },
   bubble: { maxWidth: "75%", borderRadius: 16, padding: 10, marginVertical: 4 },
   bubbleMine: { backgroundColor: "#FF6B81", alignSelf: "flex-end" },
@@ -107,4 +140,5 @@ const styles = StyleSheet.create({
   input: { flex: 1, borderWidth: 1, borderColor: "#ddd", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
   sendButton: { justifyContent: "center", marginLeft: 8 },
   sendButtonText: { color: "#FF6B81", fontWeight: "700" },
+  error: { color: '#B42318', paddingHorizontal: 12, paddingVertical: 8 },
 });

@@ -10,5 +10,12 @@ export function haversineDistanceKm(latA, lngA, latB, lngB) {
       Math.cos(toRadians(latB)) *
       Math.sin(longitudeDelta / 2) ** 2;
 
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  // El redondeo de coma flotante puede producir valores apenas fuera de [0, 1]
+  // cerca de puntos antipodales y convertir la raíz siguiente en NaN.
+  const normalizedHaversine = Math.min(1, Math.max(0, haversine));
+
+  return earthRadiusKm * 2 * Math.atan2(
+    Math.sqrt(normalizedHaversine),
+    Math.sqrt(1 - normalizedHaversine)
+  );
 }

@@ -12,12 +12,21 @@ import StoriesScreen from '../screens/StoriesScreen';
 import StatusScreen from '../screens/StatusScreen';
 import SpecialDatesScreen from '../screens/SpecialDatesScreen';
 import GeofenceSetupScreen from '../screens/GeofenceSetupScreen';
+import AccountScreen from '../screens/AccountScreen';
+import FullScreenError from '../components/FullScreenError';
 
 const Tab = createBottomTabNavigator();
 
 export default function AppNavigator() {
-  const { user, loading: authLoading } = useAuth();
-  const { couple, loading: coupleLoading } = useCouple();
+  const {
+    user,
+    loading: authLoading,
+    error: authError,
+    refreshProfile,
+    refreshSession,
+    signOut,
+  } = useAuth();
+  const { couple, loading: coupleLoading, error: coupleError, refreshCouple } = useCouple();
 
   if (authLoading || (user && coupleLoading)) {
     return (
@@ -27,8 +36,30 @@ export default function AppNavigator() {
     );
   }
 
+  if (authError) {
+    return (
+      <FullScreenError
+        title="No se pudo cargar tu cuenta"
+        error={authError}
+        actionLabel="Reintentar"
+        onAction={user ? refreshProfile : refreshSession}
+        onSignOut={user ? signOut : undefined}
+      />
+    );
+  }
   if (!user) return <AuthScreen />;
-  if (!couple) return <PairingScreen />;
+  if (coupleError && !couple) {
+    return (
+      <FullScreenError
+        title="No se pudo cargar la pareja"
+        error={coupleError}
+        actionLabel="Reintentar"
+        onAction={refreshCouple}
+        onSignOut={signOut}
+      />
+    );
+  }
+  if (!couple || couple.members.length < 2) return <PairingScreen />;
 
   return (
     <NavigationContainer>
@@ -39,6 +70,7 @@ export default function AppNavigator() {
         <Tab.Screen name="Estado" component={StatusScreen} />
         <Tab.Screen name="Fechas" component={SpecialDatesScreen} />
         <Tab.Screen name="Lugares" component={GeofenceSetupScreen} />
+        <Tab.Screen name="Cuenta" component={AccountScreen} />
       </Tab.Navigator>
     </NavigationContainer>
   );

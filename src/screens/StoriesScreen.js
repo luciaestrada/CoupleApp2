@@ -8,32 +8,32 @@ import {
   StyleSheet,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { useAppContext } from "../contexts/AppContext";
+import { usePairedAppContext } from '../contexts/AppContext';
 import { watchActiveStories, uploadStory } from "../services/storiesService";
 
 export default function StoriesScreen() {
-  const { userId, couple } = useAppContext();
+  const { userId, couple } = usePairedAppContext();
   const [stories, setStories] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!couple) return;
-    return watchActiveStories(couple.id, setStories);
-  }, [couple?.id]);
+    return watchActiveStories(couple.id, { onData: setStories, onError: setError });
+  }, [couple.id]);
 
   async function handleAddStory() {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return;
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
-    if (result.canceled || !couple || !userId) return;
-
-    setUploading(true);
+    setError(null);
     try {
-      await uploadStory(couple.id, userId, result.assets[0].uri);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.7,
+      });
+      if (result.canceled) return;
+
+      setUploading(true);
+      await uploadStory(couple.id, userId, result.assets[0]);
+    } catch (nextError) {
+      setError(nextError);
     } finally {
       setUploading(false);
     }
@@ -46,6 +46,8 @@ export default function StoriesScreen() {
           {uploading ? "Subiendo..." : "+ Añadir historia"}
         </Text>
       </TouchableOpacity>
+
+      {error && <Text style={styles.error}>{error.message}</Text>}
 
       <FlatList
         data={stories}
@@ -75,4 +77,5 @@ const styles = StyleSheet.create({
   storyImage: { width: "100%", aspectRatio: 1, borderRadius: 12 },
   storyAuthor: { textAlign: "center", marginTop: 4, color: "#666", fontSize: 12 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { color: '#B42318', marginBottom: 8 },
 });

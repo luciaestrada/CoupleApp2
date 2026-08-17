@@ -1,90 +1,112 @@
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { withSupabase } from 'npm:@supabase/server';
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL');
-const serviceKey =
-  Deno.env.get('SUPABASE_SECRET_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-const cronSecret = Deno.env.get('CRON_SECRET');
 const expoAccessToken = Deno.env.get('EXPO_ACCESS_TOKEN');
 
-if (!supabaseUrl || !serviceKey) {
-  throw new Error('Faltan SUPABASE_URL o la clave de servicio en la Edge Function');
+type MaintenanceResult = {
+  removedStories: number;
+  sentNotifications: number;
+  failedNotifications: number;
+  errors: string[];
+};
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
-const supabase = createClient(supabaseUrl, serviceKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+function resultResponse(result: MaintenanceResult, failureStatus = 500) {
+  return Response.json(result, { status: result.errors.length > 0 ? failureStatus : 200 });
+}
 
-Deno.serve(async (request) => {
-  if (!cronSecret || request.headers.get('x-cron-secret') !== cronSecret) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+export default {
+  fetch: withSupabase({ auth: 'secret' }, async (request, context) => {
+    if (request.method !== 'POST') {
+      return Response.json(
+        { error: 'Método no permitido' },
+        { status: 405, headers: { Allow: 'POST' } }
+      );
+    }
 
-  const result = {
-    removedStories: 0,
-    queuedSpecialDates: 0,
-    sentNotifications: 0,
-    failedNotifications: 0,
-  };
+    const admin = context.supabaseAdmin;
+    const result: MaintenanceResult = {
+      removedStories: 0,
+      sentNotifications: 0,
+      failedNotifications: 0,
+      errors: [],
+    };
 
-  const { data: queuedCount, error: queueError } = await supabase.rpc(
-    'queue_special_date_notifications'
-  );
-  if (queueError) throw queueError;
-  result.queuedSpecialDates = queuedCount ?? 0;
+    try {
+      const { data: expiredStories, error: storiesError } = await admin
+        .from('stories')
+        .select('id,image_path')
+        .lte('expires_at', new Date().toISOString())
+        .order('expires_at')
+        .limit(100);
+      if (storiesError) throw storiesError;
 
-  const { data: expiredStories, error: storiesError } = await supabase
-    .from('stories')
-    .select('id, image_path')
-    .lte('expires_at', new Date().toISOString())
-    .limit(100);
-  if (storiesError) throw storiesError;
+      const storiesToRemove = expiredStories ?? [];
+      if (storiesToRemove.length > 0) {
+        const paths = storiesToRemove.map((story) => story.image_path);
+        const ids = storiesToRemove.map((story) => story.id);
+        const { error: removeError } = await admin.storage.from('stories').remove(paths);
+        if (removeError) throw removeError;
 
-  if (expiredStories?.length) {
-    const paths = expiredStories.map((story) => story.image_path);
-    const ids = expiredStories.map((story) => story.id);
-    const { error: removeError } = await supabase.storage.from('stories').remove(paths);
-    if (removeError) throw removeError;
-    const { error: deleteError } = await supabase.from('stories').delete().in('id', ids);
-    if (deleteError) throw deleteError;
-    result.removedStories = ids.length;
-  }
+        const { error: deleteError } = await admin.from('stories').delete().in('id', ids);
+        if (deleteError) throw deleteError;
+        result.removedStories = ids.length;
+      }
+    } catch (error) {
+      result.errors.push(`No se pudieron limpiar las historias: ${errorMessage(error)}`);
+    }
 
-  const { data: pending, error: pendingError } = await supabase
-    .from('notifications')
-    .select('id, user_id, title, body, attempt_count')
-    .eq('status', 'pending')
-    .lt('attempt_count', 5)
-    .order('created_at')
-    .limit(100);
-  if (pendingError) throw pendingError;
+    const { data: pendingData, error: pendingError } = await admin.rpc(
+      'claim_pending_notifications',
+      { p_limit: 100 }
+    );
+    if (pendingError) throw pendingError;
 
-  if (pending?.length) {
+    const pending = pendingData ?? [];
+    if (pending.length === 0) return resultResponse(result);
+
     const userIds = [...new Set(pending.map((notification) => notification.user_id))];
-    const { data: profiles, error: profilesError } = await supabase
-      .from('profiles')
-      .select('id, expo_push_token')
-      .in('id', userIds);
-    if (profilesError) throw profilesError;
-    const tokens = new Map(profiles.map((profile) => [profile.id, profile.expo_push_token]));
+    const { data: pushTokens, error: pushTokensError } = await admin
+      .from('push_tokens')
+      .select('user_id,expo_push_token')
+      .in('user_id', userIds);
+    if (pushTokensError) throw pushTokensError;
 
+    const tokens = new Map(
+      (pushTokens ?? []).map((pushToken) => [pushToken.user_id, pushToken.expo_push_token])
+    );
     const deliverable = pending.filter((notification) => tokens.get(notification.user_id));
     const missingToken = pending.filter((notification) => !tokens.get(notification.user_id));
 
+    async function updateNotification(
+      notificationId: string,
+      changes: Record<string, string | number | null>
+    ) {
+      const { error } = await admin.from('notifications').update(changes).eq('id', notificationId);
+      if (error) throw error;
+    }
+
     await Promise.all(
       missingToken.map((notification) =>
-        supabase
-          .from('notifications')
-          .update({ status: 'failed', last_error: 'El usuario no tiene token Expo Push' })
-          .eq('id', notification.id)
+        updateNotification(notification.id, {
+          status: notification.attempt_count >= 5 ? 'failed' : 'pending',
+          claimed_at: null,
+          last_error: 'El usuario no tiene token Expo Push',
+        })
       )
     );
     result.failedNotifications += missingToken.length;
 
-    if (deliverable.length) {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (expoAccessToken) headers.Authorization = `Bearer ${expoAccessToken}`;
+    if (deliverable.length === 0) return resultResponse(result);
 
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (expoAccessToken) headers.Authorization = `Bearer ${expoAccessToken}`;
+
+    let response: Response;
+    try {
+      response = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers,
         body: JSON.stringify(
@@ -93,31 +115,51 @@ Deno.serve(async (request) => {
             title: notification.title,
             body: notification.body,
             sound: 'default',
+            channelId: 'default',
           }))
         ),
       });
-      const payload = await response.json();
-      const tickets = Array.isArray(payload.data) ? payload.data : [];
-
+    } catch (error) {
+      const message = errorMessage(error);
       await Promise.all(
-        deliverable.map((notification, index) => {
-          const ticket = tickets[index];
-          const sent = response.ok && ticket?.status === 'ok';
-          if (sent) result.sentNotifications += 1;
-          else result.failedNotifications += 1;
-          return supabase
-            .from('notifications')
-            .update({
-              status: sent ? 'sent' : notification.attempt_count >= 4 ? 'failed' : 'pending',
-              attempt_count: notification.attempt_count + 1,
-              sent_at: sent ? new Date().toISOString() : null,
-              last_error: sent ? null : ticket?.message || `Expo Push HTTP ${response.status}`,
-            })
-            .eq('id', notification.id);
-        })
+        deliverable.map((notification) =>
+          updateNotification(notification.id, {
+            status: notification.attempt_count >= 5 ? 'failed' : 'pending',
+            claimed_at: null,
+            last_error: `No se pudo contactar con Expo Push: ${message}`,
+          })
+        )
       );
+      result.failedNotifications += deliverable.length;
+      result.errors.push(`No se pudo contactar con Expo Push: ${message}`);
+      return resultResponse(result, 502);
     }
-  }
 
-  return Response.json(result);
-});
+    const payload = await response.json().catch(() => ({}));
+    const tickets = Array.isArray(payload.data) ? payload.data : [];
+
+    await Promise.all(
+      deliverable.map(async (notification, index) => {
+        const ticket = tickets[index];
+        const sent = response.ok && ticket?.status === 'ok';
+
+        if (sent) result.sentNotifications += 1;
+        else result.failedNotifications += 1;
+
+        await updateNotification(notification.id, {
+          status: sent ? 'sent' : notification.attempt_count >= 5 ? 'failed' : 'pending',
+          claimed_at: null,
+          sent_at: sent ? new Date().toISOString() : null,
+          last_error: sent
+            ? null
+            : ticket?.message ?? `Expo Push respondió HTTP ${response.status}`,
+        });
+      })
+    );
+
+    if (!response.ok) {
+      result.errors.push(`Expo Push respondió HTTP ${response.status}`);
+    }
+    return resultResponse(result, 502);
+  }),
+};

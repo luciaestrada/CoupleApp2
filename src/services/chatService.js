@@ -1,4 +1,5 @@
 import { supabase } from '../supabase/client';
+import { watchQuery } from './realtimeService';
 
 function normalizeMessage(message) {
   return {
@@ -10,50 +11,33 @@ function normalizeMessage(message) {
   };
 }
 
-export function watchMessages(coupleId, onChange) {
-  let active = true;
+export function watchMessages(coupleId, handlers) {
+  return watchQuery({
+    channelName: `messages-${coupleId}`,
+    table: 'messages',
+    filter: `couple_id=eq.${coupleId}`,
+    async load() {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id,sender_id,type,text,created_at')
+        .eq('couple_id', coupleId)
+        .order('created_at', { ascending: false })
+        .limit(200);
 
-  async function loadMessages() {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('couple_id', coupleId)
-      .order('created_at', { ascending: true });
-
-    if (error) throw error;
-    if (active) onChange((data || []).map(normalizeMessage));
-  }
-
-  loadMessages().catch(console.error);
-  const channel = supabase
-    .channel(`messages-${coupleId}`)
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'messages', filter: `couple_id=eq.${coupleId}` },
-      () => loadMessages().catch(console.error)
-    )
-    .subscribe();
-
-  return () => {
-    active = false;
-    supabase.removeChannel(channel);
-  };
-}
-
-export async function sendMessage(coupleId, userId, text) {
-  const trimmedText = text.trim();
-  if (!trimmedText) return;
-
-  const { error } = await supabase.from('messages').insert({
-    couple_id: coupleId,
-    sender_id: userId,
-    type: 'text',
-    text: trimmedText,
+      if (error) throw error;
+      return data.map(normalizeMessage);
+    },
+    ...handlers,
   });
-  if (error) throw error;
 }
 
-export async function sendLoveTap(coupleId) {
-  const { error } = await supabase.rpc('send_love', { p_couple_id: coupleId });
+export async function sendMessage(coupleId, text) {
+  const trimmedText = text.trim();
+  if (!trimmedText) throw new Error('El mensaje no puede estar vacío.');
+
+  const { error } = await supabase.rpc('send_message', {
+    p_couple_id: coupleId,
+    p_text: trimmedText,
+  });
   if (error) throw error;
 }

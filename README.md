@@ -1,46 +1,58 @@
-# Couple App
+# CoupleApp
 
-App multiplataforma (iOS/Android) tipo Couple360, construida con Expo (React Native) + Firebase.
+Aplicación móvil para parejas construida con Expo, React Native y Supabase. El repositorio usa un
+solo backend y un solo modelo de datos: no contiene Firebase ni esquemas alternativos. Las
+actualizaciones no destructivas para instalaciones existentes viven en `supabase/migrations`.
 
-## Estructura
+## Arquitectura
 
+```text
+App.js                         composición de providers y efectos de arranque
+src/config/                    validación estricta del entorno
+src/context/                   sesión y estado de la pareja
+src/contexts/AppContext.js     fachada de estado para las pantallas
+src/services/                  acceso a datos, comandos RPC y suscripciones Realtime
+src/screens/                   presentación e interacción
+src/supabase/client.js         único cliente Supabase
+supabase/setup.sql             instalador canónico de base de datos
+supabase/functions/maintenance limpieza de Storage y entrega de Expo Push
 ```
-couple-app/
-  App.js                    # entry point
-  app.json                  # config Expo (permisos, bundle IDs)
-  package.json
-  src/
-    firebase/                # config, reglas de seguridad, modelo de datos
-    context/                 # AuthContext, CoupleContext (estado global en tiempo real)
-    services/                # racha, distancia, geofencing, notificaciones
-    components/              # StreakBadge, DistanceCard, DaysCounter
-    screens/                 # Home, Chat, Historias, Estado, Fechas especiales, Lugares
-    navigation/               # navegación por pestañas
-  functions/                 # Cloud Functions (racha, historias caducadas, recordatorios, geofence)
-  widgets/                   # referencia nativa para widgets (no ejecutable desde Expo Go)
-    ios/CoupleWidget.swift
-    android/CoupleWidget.kt
-```
+
+Las consultas pasan por RLS. Las escrituras de negocio pasan por funciones SQL que obtienen el
+usuario desde `auth.uid()`; el cliente no decide `user_id`, `sender_id` ni `couple_id` en esas
+operaciones.
+
+El inventario completo de flujos, estado, limitaciones y verificación vive en
+[`docs/FUNCTIONALITY.md`](docs/FUNCTIONALITY.md).
 
 ## Puesta en marcha
 
-1. `npm install` dentro de `couple-app/`
-2. Crear proyecto en [Firebase Console](https://console.firebase.google.com), habilitar Firestore, Auth, Storage y Cloud Messaging
-3. Sustituir las credenciales en `src/firebase/config.js`
-4. Desplegar reglas: `firebase deploy --only firestore:rules` (usando `src/firebase/firestore.rules`)
-5. Desplegar functions: dentro de `functions/`, `npm install` y `firebase deploy --only functions`
-6. `npx expo start` para probar en Expo Go (los widgets y el geofencing en segundo plano requieren un build nativo, ver abajo)
+1. Instala dependencias con `npm install`.
+2. Copia `.env.example` a `.env` y configura la URL y la clave publicable de Supabase.
+3. Ejecuta completo [`supabase/setup.sql`](supabase/setup.sql) en el SQL Editor.
+4. Despliega la función `maintenance` siguiendo [`supabase/README.md`](supabase/README.md).
+5. Ejecuta `npm run doctor`, `npm run verify`, `npm test`, `npm run typecheck`, `npm run lint`
+   y después `npm run android` o `npm run ios`.
 
-## Limitaciones importantes
+`supabase/setup.sql` es un instalador limpio: conserva las cuentas de `auth.users`, pero elimina y
+recrea todos los datos funcionales de CoupleApp. Está pensado para sustituir el backend incoherente
+anterior; no debe ejecutarse sobre datos que necesites conservar sin hacer antes una copia.
 
-- **Widgets de pantalla de bloqueo/inicio**: no se pueden probar en Expo Go. Requieren `npx expo prebuild` para generar los proyectos nativos `ios/` y `android/`, y luego añadir manualmente los targets de WidgetKit (Xcode) y Glance (Android Studio) usando los archivos de referencia en `widgets/`. Es la parte de mayor esfuerzo de desarrollo nativo.
-- **Ubicación en segundo plano en iOS**: Apple exige justificación clara en la revisión de App Store para `NSLocationAlwaysAndWhenInUseUsageDescription`; probable que pidan capturas de pantalla mostrando el uso.
-- **Autenticación y emparejamiento de pareja**: no incluido en este scaffold — falta la pantalla de login/registro y el flujo de "invitar a mi pareja" (código de invitación) para crear el documento `couples/{coupleId}` con los dos `uid`.
-- **Push notifications reales**: el envío usa la API de Expo Push; para producción a gran escala conviene revisar cuotas y considerar FCM directo.
+Si la instancia ya estaba instalada antes de las rachas individuales, ejecuta únicamente
+[`20260813000100_personal_love_streaks.sql`](supabase/migrations/20260813000100_personal_love_streaks.sql).
+La actualización conserva los datos y usa la racha compartida existente como valor inicial de cada
+miembro; no vuelvas a ejecutar `setup.sql` sobre esa instancia.
 
-## Siguientes pasos sugeridos
+## Configuración móvil
 
-1. Pantalla de login (email/Google) + flujo de emparejamiento con código de invitación
-2. `expo prebuild` y configuración de los widgets nativos
-3. Pruebas de geofencing en dispositivo físico (no funciona en simulador/emulador)
-4. Pulir UI/UX (paleta de colores, animaciones de racha, transición de historias)
+La distancia se publica con permiso de primer plano mientras la app está activa. El geofencing en
+segundo plano sí requiere un development build o una compilación nativa; Expo Go no ejecuta esa
+tarea. iOS y Android también pueden exigir que el usuario habilite manualmente la ubicación
+permanente desde Ajustes.
+
+Los permisos no se solicitan al arrancar. Se activan desde la función correspondiente o desde el
+panel de `Cuenta`, que distingue una denegación recuperable de un permiso bloqueado y, en este
+último caso, abre los Ajustes de la aplicación.
+
+Las variables `EXPO_PUBLIC_*` forman parte de la aplicación compilada. Solo deben contener la URL y
+una clave `sb_publishable_...`; nunca una clave `sb_secret_...`.

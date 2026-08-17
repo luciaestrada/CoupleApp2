@@ -1,64 +1,66 @@
-# Configuración de Supabase self-hosted
+# Backend Supabase
 
-1. Abre Studio en `https://supabase.pruebahomelab.es`.
-2. En SQL Editor, ejecuta `migrations/202607140001_initial_schema.sql`.
-3. En SQL Editor, ejecuta `cron.sql` para activar el reinicio diario de rachas.
-4. Comprueba que Realtime está activo para las tablas creadas.
-5. Mantén el bucket `stories` como privado; las imágenes se leen con URLs firmadas.
+## Instalación de la base de datos
 
-## Reparar la RPC de creación de pareja
+Ejecuta [`setup.sql`](setup.sql) completo en el SQL Editor. El archivo configura en una sola
+transacción el modelo relacional, funciones de negocio, triggers, permisos, RLS, Storage privado,
+Realtime y tareas `pg_cron`. Al confirmar, también ordena a PostgREST recargar su esquema.
 
-Si la aplicación muestra que `public.create_couple_with_invite(p_start_date)` no aparece en el
-schema cache, ejecuta en SQL Editor
-`migrations/202607150001_restore_create_couple_rpc.sql`. La migración vuelve a crear la función,
-restaura el permiso para usuarios autenticados y solicita a PostgREST que recargue el esquema.
+El instalador conserva `auth.users`, reconstruye sus perfiles y elimina el resto de los datos de
+CoupleApp. Para una instancia que ya contiene datos, no se vuelve a ejecutar: las actualizaciones
+no destructivas versionadas están en `migrations/` y se aplican una sola vez por orden de nombre.
+
+La actualización `20260813000100_personal_love_streaks.sql` convierte la racha compartida en dos
+rachas personales y copia el valor existente a ambos miembros antes de retirar las columnas antiguas.
+
+Si `create extension pg_cron` falla, la instancia no tiene el módulo cargado en PostgreSQL. Debes
+habilitar `pg_cron` en la infraestructura de la instancia antes de volver a ejecutar el instalador;
+no se resuelve con una migración alternativa.
 
 ## Edge Function de mantenimiento
 
-La función `functions/maintenance/index.ts` hace tres tareas:
+`functions/maintenance/index.ts` elimina historias caducadas (archivo y fila) y entrega la cola de
+notificaciones mediante Expo Push. Usa `@supabase/server` y solo acepta una clave secreta de
+Supabase; no usa `service_role`, `anon` ni un segundo secreto propio.
 
-- elimina archivos y filas de historias caducadas;
-- envía la cola de notificaciones mediante Expo Push;
-- crea recordatorios de fechas especiales de forma idempotente.
+Cada ejecución reserva su lote de notificaciones de forma atómica. Esto evita envíos duplicados
+si dos schedulers se solapan; una reserva interrumpida se libera automáticamente tras diez minutos.
 
-En el servidor:
-
-1. Copia `supabase/functions/maintenance` a
-   `/opt/supabase/docker/volumes/functions/maintenance`.
-2. Genera un secreto con `openssl rand -hex 32` y guárdalo como `CRON_SECRET` en el `.env`.
-3. Pasa `CRON_SECRET: ${CRON_SECRET}` al servicio `functions` de `docker-compose.yml`.
-4. Si activas seguridad mejorada de Expo Push, pasa también `EXPO_ACCESS_TOKEN`.
-5. Recrea Edge Runtime con `sh run.sh recreate functions`.
-6. Invoca cada minuto `POST https://supabase.pruebahomelab.es/functions/v1/maintenance`
-   enviando la cabecera `x-cron-secret` con el secreto anterior.
-
-Aunque el servidor tenga `FUNCTIONS_VERIFY_JWT=false`, esta función rechaza peticiones que no
-incluyan el secreto de cron.
-
-La aplicación solo contiene la URL y la clave publicable. No añadas al repositorio
-`SUPABASE_SECRET_KEY`, `SERVICE_ROLE_KEY`, claves JWT ni la contraseña de PostgreSQL.
-
-Para Auth móvil, configura en el servidor:
-
-```env
-ENABLE_EMAIL_AUTOCONFIRM=true
-ADDITIONAL_REDIRECT_URLS=coupleapp://auth/callback
-```
-
-Esta opción evita que Auth intente enviar un correo de confirmación durante el desarrollo. Después
-de cambiar el `.env` de Supabase, recrea el servicio `auth` para aplicar los valores:
+Con Supabase CLI:
 
 ```sh
-cd /opt/supabase/docker
-docker compose up -d --force-recreate auth
-docker compose exec auth printenv GOTRUE_MAILER_AUTOCONFIRM
-docker compose logs --tail=100 auth
+deno check functions/maintenance/index.ts
+supabase functions deploy maintenance --no-verify-jwt
 ```
 
-El segundo comando debe imprimir `true`. Si el alta responde con
-`Error sending confirmation email`, el contenedor sigue teniendo la confirmación activada o la
-configuración SMTP no es válida.
+En una instalación self-hosted, copia la carpeta `functions/maintenance` al volumen de Edge
+Functions y recrea ese servicio. La comprobación JWT de plataforma debe quedar desactivada para
+esta función porque la autenticación con clave secreta se valida dentro de `@supabase/server`; el
+repositorio incluye la misma declaración en `config.toml`.
 
-En producción no uses autoconfirmación. Configura `ENABLE_EMAIL_AUTOCONFIRM=false` y proporciona
-valores reales para `SMTP_ADMIN_EMAIL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` y
-`SMTP_SENDER_NAME`; después vuelve a recrear el servicio `auth`.
+Invócala de forma periódica con una petición `POST` y la clave secreta en `apikey`:
+
+```sh
+curl -X POST 'https://TU_SUPABASE/functions/v1/maintenance' \
+  -H 'apikey: sb_secret_TU_CLAVE'
+```
+
+Programa esa llamada cada minuto o cada pocos minutos desde un scheduler privado. Si activas la
+seguridad mejorada de Expo Push, configura `EXPO_ACCESS_TOKEN` como secreto de la función.
+
+## Auth
+
+El SQL crea perfiles para cuentas actuales y futuras, pero la entrega de correos y SMTP pertenecen
+al servicio Auth y no a PostgreSQL. Para producción, configura un SMTP real y mantén la confirmación
+de correo habilitada. La aplicación admite ese flujo: tras el registro informa al usuario cuando
+debe confirmar su correo.
+
+## Seguridad
+
+- La aplicación móvil solo usa `EXPO_PUBLIC_SUPABASE_URL` y una clave `sb_publishable_...`.
+- La clave `sb_secret_...` solo vive en el servidor o scheduler privado.
+- Los tokens Expo Push viven en una tabla sin acceso para el cliente y se reasignan al último
+  usuario que registra el dispositivo.
+- El bucket `stories` es privado y las lecturas usan URLs firmadas.
+- Las identidades de las escrituras se derivan de `auth.uid()` en funciones SQL `security definer`
+  con un `search_path` explícito.

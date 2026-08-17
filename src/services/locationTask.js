@@ -3,43 +3,63 @@ import * as TaskManager from 'expo-task-manager';
 import { supabase } from '../supabase/client';
 
 export const GEOFENCE_TASK = 'GEOFENCE_TASK';
+export const MAX_GEOFENCE_REGIONS = 20;
 
-function parseRegionIdentifier(identifier) {
-  const [geofenceId, coupleId, userId] = identifier.split('|');
-  return { geofenceId, coupleId, userId };
-}
+let registrationQueue = Promise.resolve();
 
 if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
   TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
-    if (error || data?.eventType !== Location.GeofencingEventType.Enter) return;
+    if (error) throw error;
+    if (data?.eventType !== Location.GeofencingEventType.Enter) return;
 
-    const { geofenceId, coupleId, userId } = parseRegionIdentifier(data.region.identifier);
-    if (!geofenceId || !coupleId || !userId) return;
+    const geofenceId = data.region.identifier;
+    if (!geofenceId) throw new Error('El evento de geofencing no contiene un identificador.');
 
-    const { error: insertError } = await supabase.from('geofence_events').insert({
-      geofence_id: geofenceId,
-      couple_id: coupleId,
-      user_id: userId,
-      event_type: 'enter',
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (!sessionData.session) return;
+
+    const expiresSoon = sessionData.session.expires_at * 1000 <= Date.now() + 60_000;
+    if (expiresSoon) {
+      const { error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError) throw refreshError;
+    }
+
+    const { error: insertError } = await supabase.rpc('record_geofence_entry', {
+      p_geofence_id: geofenceId,
     });
-    if (insertError) console.error('No se pudo registrar la llegada:', insertError);
+    if (insertError) throw insertError;
   });
 }
 
-export async function registerGeofences(geofences, coupleId, userId) {
-  const regions = geofences.map((geofence) => ({
-    identifier: `${geofence.id}|${coupleId}|${userId}`,
-    latitude: geofence.lat,
-    longitude: geofence.lng,
-    radius: geofence.radiusMeters || geofence.radius_meters || 150,
-    notifyOnEnter: true,
-    notifyOnExit: false,
-  }));
+async function replaceRegisteredGeofences(geofences) {
+  if (geofences.length > MAX_GEOFENCE_REGIONS) {
+    throw new Error(`Solo se pueden monitorizar ${MAX_GEOFENCE_REGIONS} lugares.`);
+  }
 
   const alreadyRegistered = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
-  if (regions.length === 0) {
+  if (geofences.length === 0) {
     if (alreadyRegistered) await Location.stopGeofencingAsync(GEOFENCE_TASK);
     return;
   }
-  await Location.startGeofencingAsync(GEOFENCE_TASK, regions);
+
+  await Location.startGeofencingAsync(
+    GEOFENCE_TASK,
+    geofences.map((geofence) => ({
+      identifier: geofence.id,
+      latitude: geofence.lat,
+      longitude: geofence.lng,
+      radius: geofence.radiusMeters,
+      notifyOnEnter: true,
+      notifyOnExit: false,
+    }))
+  );
+}
+
+export function registerGeofences(geofences) {
+  const nextRegistration = registrationQueue
+    .catch(() => undefined)
+    .then(() => replaceRegisteredGeofences(geofences));
+  registrationQueue = nextRegistration;
+  return nextRegistration;
 }

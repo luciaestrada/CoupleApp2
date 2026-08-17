@@ -2,34 +2,38 @@ import 'react-native-url-polyfill/auto';
 import 'expo-sqlite/localStorage/install';
 import { createClient } from '@supabase/supabase-js';
 import { AppState } from 'react-native';
+import { environment } from '../config/environment';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+export const supabase = createClient(
+  environment.supabaseUrl,
+  environment.supabasePublishableKey,
+  {
+    auth: {
+      storage: globalThis.localStorage,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,
+    },
+  }
+);
 
-export const supabaseConfigurationError =
-  !supabaseUrl || !supabasePublishableKey
-    ? 'Faltan EXPO_PUBLIC_SUPABASE_URL o EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY.'
-    : null;
+export function startSupabaseAuthAutoRefresh() {
+  if (AppState.currentState === 'active') {
+    supabase.auth.startAutoRefresh();
+  }
 
-export const supabase = supabaseConfigurationError
-  ? null
-  : createClient(supabaseUrl, supabasePublishableKey, {
-      auth: {
-        storage: globalThis.localStorage,
-        autoRefreshToken: true,
-        persistSession: true,
-        detectSessionInUrl: false,
-      },
-    });
-
-if (supabase && !globalThis.__coupleAppSupabaseRefreshListener) {
-  globalThis.__coupleAppSupabaseRefreshListener = AppState.addEventListener('change', (state) => {
+  const subscription = AppState.addEventListener('change', (state) => {
     if (state === 'active') {
       supabase.auth.startAutoRefresh();
     } else {
       supabase.auth.stopAutoRefresh();
     }
   });
+
+  return () => {
+    subscription.remove();
+    supabase.auth.stopAutoRefresh();
+  };
 }
 
 export default supabase;

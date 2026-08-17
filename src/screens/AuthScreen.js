@@ -22,24 +22,15 @@ export default function AuthScreen() {
   const [successMessage, setSuccessMessage] = useState('');
 
   function getFriendlyAuthError(error) {
-    const technicalMessage = String(error?.message || '');
-    const normalizedMessage = technicalMessage.toLowerCase();
-    const isServerFailure =
-      error?.status >= 500 ||
-      normalizedMessage.includes('"status":500') ||
-      normalizedMessage.includes('unexpected_failure');
-
-    if (isServerFailure && mode === 'signup') {
-      return 'El servidor no pudo completar el registro. Revisa la configuración del correo de confirmación de Supabase.';
-    }
-    if (normalizedMessage.includes('user already registered')) {
-      return 'Ya existe una cuenta con ese correo.';
-    }
-    if (normalizedMessage.includes('invalid login credentials')) {
-      return 'El correo o la contraseña no son correctos.';
-    }
-
-    return technicalMessage || 'No se pudo completar la autenticación.';
+    const messagesByCode = {
+      email_exists: 'Ya existe una cuenta con ese correo.',
+      user_already_exists: 'Ya existe una cuenta con ese correo.',
+      invalid_credentials: 'El correo o la contraseña no son correctos.',
+      email_address_invalid: 'El correo no tiene un formato válido.',
+      weak_password: 'La contraseña no cumple los requisitos de seguridad.',
+      signup_disabled: 'El registro de cuentas está desactivado.',
+    };
+    return messagesByCode[error.code] ?? error.message;
   }
 
   async function handleSubmit() {
@@ -61,7 +52,6 @@ export default function AuthScreen() {
         await signIn({ email, password });
       }
     } catch (error) {
-      console.error('Error de autenticación:', error);
       setErrorMessage(getFriendlyAuthError(error));
     } finally {
       setSubmitting(false);
@@ -83,6 +73,7 @@ export default function AuthScreen() {
         {mode === 'signup' && (
           <TextInput
             autoCapitalize="words"
+            maxLength={80}
             placeholder="Tu nombre"
             style={styles.input}
             value={name}

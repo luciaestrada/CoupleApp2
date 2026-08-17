@@ -1,39 +1,31 @@
 import { supabase } from '../supabase/client';
+import { watchQuery } from './realtimeService';
 
-function normalizeStreak(couple) {
+function normalizeStreak(member) {
   return {
-    count: couple?.streak_count || 0,
-    lastConfirmedDay: couple?.last_completed_date || null,
+    userId: member.user_id,
+    count: member.love_streak_count,
+    lastConfirmedDay: member.last_love_date,
   };
 }
 
-export function watchStreak(coupleId, onChange) {
-  let active = true;
-
-  async function loadStreak() {
-    const { data, error } = await supabase
-      .from('couples')
-      .select('streak_count,last_completed_date')
-      .eq('id', coupleId)
-      .single();
-    if (error) throw error;
-    if (active) onChange(normalizeStreak(data));
-  }
-
-  loadStreak().catch(console.error);
-  const channel = supabase
-    .channel(`streak-${coupleId}`)
-    .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'couples', filter: `id=eq.${coupleId}` },
-      ({ new: nextCouple }) => onChange(normalizeStreak(nextCouple))
-    )
-    .subscribe();
-
-  return () => {
-    active = false;
-    supabase.removeChannel(channel);
-  };
+export function watchStreaks(coupleId, handlers) {
+  return watchQuery({
+    channelName: `streaks-${coupleId}`,
+    table: 'couple_members',
+    event: 'UPDATE',
+    filter: `couple_id=eq.${coupleId}`,
+    async load() {
+      const { data, error } = await supabase
+        .from('couple_members')
+        .select('user_id,love_streak_count,last_love_date')
+        .eq('couple_id', coupleId)
+        .order('joined_at', { ascending: true });
+      if (error) throw error;
+      return data.map(normalizeStreak);
+    },
+    ...handlers,
+  });
 }
 
 export async function sendLove(coupleId) {

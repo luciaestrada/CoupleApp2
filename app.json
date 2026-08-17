@@ -2,6 +2,7 @@
   "expo": {
     "name": "CoupleApp",
     "slug": "couple-app",
+    "scheme": "coupleapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "ios": {
@@ -11,32 +12,35 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrar la distancia con tu pareja y avisar cuando llegas a un lugar guardado.",
         "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para calcular la distancia con tu pareja.",
         "UIBackgroundModes": [
-          "location",
-          "fetch",
-          "remote-notification",
-          "location",
-          "fetch",
-          "remote-notification"
+          "location"
         ],
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.tuempresa.coupleapp",
-      "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "RECEIVE_BOOT_COMPLETED",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
-      ]
+      "package": "com.tuempresa.coupleapp"
     },
     "plugins": [
-      "expo-location",
-      "expo-task-manager",
-      "expo-status-bar",
-      "expo-sqlite"
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": false,
+          "isIosBackgroundLocationEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "Permite que CoupleApp use tu ubicación para calcular la distancia con tu pareja y detectar la llegada a lugares guardados."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permite que CoupleApp acceda a tus fotos para publicar historias.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-notifications",
+      "expo-sqlite",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {

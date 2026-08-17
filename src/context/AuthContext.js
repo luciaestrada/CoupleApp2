@@ -1,97 +1,98 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { supabase } from '../supabase/client';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { supabase, startSupabaseAuthAutoRefresh } from '../supabase/client';
+import { getProfile, watchProfile } from '../services/profileService';
 
 const AuthContext = createContext(null);
-
-function normalizeProfile(profile) {
-  if (!profile) return null;
-  return {
-    id: profile.id,
-    name: profile.name,
-    avatarUrl: profile.avatar_url,
-    expoPushToken: profile.expo_push_token,
-    status: {
-      text: profile.status_text,
-      emoji: profile.status_emoji,
-      updatedAt: profile.status_updated_at,
-    },
-  };
-}
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const loadProfile = useCallback(async (userId) => {
     if (!userId) {
       setUserProfile(null);
+      setError(null);
       return;
     }
-
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (error) throw error;
-    setUserProfile(normalizeProfile(data));
+    const profile = await getProfile(userId);
+    setUserProfile(profile);
+    setError(null);
   }, []);
+
+  const refreshSession = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      setSession(data.session);
+      if (data.session?.user?.id) {
+        await loadProfile(data.session.user.id);
+      } else {
+        setUserProfile(null);
+      }
+      return data.session;
+    } catch (nextError) {
+      setError(nextError);
+      throw nextError;
+    } finally {
+      setLoading(false);
+    }
+  }, [loadProfile]);
 
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data, error }) => {
+    const stopAutoRefresh = startSupabaseAuthAutoRefresh();
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (!mounted) return;
-      if (error) console.error('No se pudo restaurar la sesión:', error);
-      setSession(data?.session || null);
+      if (sessionError) {
+        setError(sessionError);
+      } else {
+        setSession(data.session);
+      }
       setLoading(false);
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (mounted) setSession(nextSession);
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') setUserProfile(null);
+      setSession(nextSession);
+      setError(null);
     });
 
     return () => {
       mounted = false;
+      stopAutoRefresh();
       data.subscription.unsubscribe();
     };
   }, []);
 
   useEffect(() => {
     const userId = session?.user?.id;
-    if (!userId) {
-      setUserProfile(null);
-      return undefined;
-    }
+    if (!userId) return undefined;
 
-    loadProfile(userId).catch((error) => console.error('No se pudo cargar el perfil:', error));
+    return watchProfile(userId, {
+      onData: (profile) => {
+        setUserProfile(profile);
+        setError(null);
+      },
+      onError: setError,
+    });
+  }, [session?.user?.id]);
 
-    const channel = supabase
-      .channel(`profile-${userId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
-        () => loadProfile(userId).catch(console.error)
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [loadProfile, session?.user?.id]);
-
-  async function signIn({ email, password }) {
+  const signIn = useCallback(async ({ email, password }) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
     if (error) throw error;
     return data;
-  }
+  }, []);
 
-  async function signUp({ email, password, name }) {
+  const signUp = useCallback(async ({ email, password, name }) => {
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
       password,
@@ -99,29 +100,60 @@ export function AuthProvider({ children }) {
     });
     if (error) throw error;
     return data;
-  }
+  }, []);
 
-  async function signOut() {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-  }
+  const signOut = useCallback(async () => {
+    // Evita que un dispositivo compartido siga recibiendo avisos de la cuenta saliente.
+    // El cierre de sesión se intenta incluso si la limpieza remota falla.
+    const { error: tokenError } = session?.user?.id
+      ? await supabase.rpc('set_push_token', { p_token: null })
+      : { error: null };
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) throw signOutError;
+    if (tokenError) {
+      throw new Error(
+        `La sesión se cerró, pero no se pudo retirar el token de notificaciones: ${tokenError.message}`
+      );
+    }
+  }, [session?.user?.id]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        session,
-        user: session?.user || null,
-        userProfile,
-        loading,
-        signIn,
-        signUp,
-        signOut,
-        refreshProfile: () => loadProfile(session?.user?.id),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const refreshProfile = useCallback(
+    () => loadProfile(session?.user?.id),
+    [loadProfile, session?.user?.id]
   );
+  const activeUserProfile = userProfile?.id === session?.user?.id ? userProfile : null;
+
+  const value = useMemo(
+    () => ({
+      session,
+      user: session?.user ?? null,
+      userProfile: activeUserProfile,
+      loading,
+      error,
+      signIn,
+      signUp,
+      signOut,
+      refreshSession,
+      refreshProfile,
+    }),
+    [
+      activeUserProfile,
+      error,
+      loading,
+      refreshProfile,
+      refreshSession,
+      session,
+      signIn,
+      signOut,
+      signUp,
+    ]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export const useAuth = () => useContext(AuthContext);
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth debe usarse dentro de AuthProvider.');
+  return context;
+}
