@@ -1,5 +1,7 @@
 # Backend Supabase
 
+**Actualización de septiembre de 2026:** la entrega push vive ahora en `functions/push`; `maintenance` limpia archivos y procesa eliminaciones de cuenta. La migración `20260908000100_live_location_notifications.sql` y las instrucciones vigentes están en [IMPLEMENTACION_ESTADO.md](../docs/IMPLEMENTACION_ESTADO.md). El resto de este documento describe la instalación base anterior.
+
 ## Instalación de la base de datos
 
 Ejecuta [`setup.sql`](setup.sql) completo en el SQL Editor. El archivo configura en una sola

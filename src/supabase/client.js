@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { AppState } from 'react-native';
 import { environment } from '../config/environment';
 
+/** @type {import('@supabase/supabase-js').SupabaseClient<import('../../supabase/functions/_shared/database.types').Database>} */
 export const supabase = createClient(
   environment.supabaseUrl,
   environment.supabasePublishableKey,
@@ -14,7 +15,7 @@ export const supabase = createClient(
       persistSession: true,
       detectSessionInUrl: false,
     },
-  }
+  },
 );
 
 export function startSupabaseAuthAutoRefresh() {

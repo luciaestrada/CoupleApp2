@@ -1,17 +1,23 @@
 import React, { useEffect, useState } from "react";
 import {
   View,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
+import { useHeaderHeight } from '@react-navigation/elements';
+import { colors } from '../ui/theme';
 import { usePairedAppContext } from '../contexts/AppContext';
 import { clearMyStatus, setMyStatus, watchStatus } from "../services/statusService";
 
 const QUICK_EMOJIS = ["😍", "😴", "🥰", "😢", "🤒", "🎉", "😤", "🥹"];
 
 export default function StatusScreen() {
+  const headerHeight = useHeaderHeight();
   const { userId, couple, partnerId } = usePairedAppContext();
   const [text, setText] = useState("");
   const [emoji, setEmoji] = useState('');
@@ -56,7 +62,7 @@ export default function StatusScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.container}>
       <Text style={styles.sectionTitle}>Estado de tu pareja</Text>
       {error && <Text style={styles.error}>{error.message}</Text>}
       <View style={styles.partnerCard}>
@@ -89,6 +95,7 @@ export default function StatusScreen() {
       </View>
 
       <TextInput
+        accessibilityLabel="Tu estado"
         style={styles.input}
         placeholder="Escribe una frase corta..."
         maxLength={60}
@@ -113,12 +120,12 @@ export default function StatusScreen() {
           <Text style={styles.clearButtonText}>Quitar mi estado</Text>
         </TouchableOpacity>
       )}
-    </View>
+    </ScrollView></KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: "#fff" },
+  container: { flexGrow: 1, padding: 16, backgroundColor: colors.surface },
   sectionTitle: { fontSize: 14, fontWeight: "700", color: "#333", marginTop: 12, marginBottom: 8 },
   partnerCard: { backgroundColor: "#FFF0F3", borderRadius: 12, padding: 16 },
   partnerText: { fontSize: 18 },
@@ -126,10 +133,10 @@ const styles = StyleSheet.create({
   currentStatus: { color: "#666", marginBottom: 8 },
   emojiRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   emojiButton: { padding: 8, borderRadius: 10, borderWidth: 1, borderColor: "#ddd" },
-  emojiSelected: { borderColor: "#FF6B81", backgroundColor: "#FFF0F3" },
+  emojiSelected: { borderColor: colors.primary, backgroundColor: "#FFF0F3" },
   emojiText: { fontSize: 22 },
   input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 12, padding: 14, fontSize: 16, marginBottom: 12 },
-  publishButton: { backgroundColor: "#FF6B81", borderRadius: 12, padding: 16, alignItems: "center" },
+  publishButton: { backgroundColor: colors.primary, borderRadius: 12, padding: 16, alignItems: "center" },
   publishButtonText: { color: "#fff", fontWeight: "700" },
   clearButton: { alignItems: 'center', marginTop: 16, padding: 8 },
   clearButtonText: { color: '#777', fontWeight: '600' },

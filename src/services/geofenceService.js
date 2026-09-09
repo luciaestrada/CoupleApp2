@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { AppState } from 'react-native';
 import { supabase } from '../supabase/client';
 import { watchQuery } from './realtimeService';
 import { MAX_GEOFENCE_REGIONS, registerGeofences } from './locationTask';
@@ -46,7 +47,9 @@ export async function createGeofence({ name, lat, lng, radiusMeters }) {
 }
 
 export async function deleteGeofence(geofenceId) {
-  const { error } = await supabase.rpc('delete_geofence', { p_geofence_id: geofenceId });
+  const { error } = await supabase.rpc('delete_geofence', {
+    p_geofence_id: geofenceId,
+  });
   if (error) throw error;
 }
 
@@ -56,15 +59,28 @@ export async function syncGeofences(geofences) {
     await registerGeofences([]);
     return false;
   }
-  await registerGeofences(geofences);
-  return true;
+  return registerGeofences(geofences);
 }
 
 export function startGeofenceSync(coupleId, userId, { onError }) {
-  return watchGeofences(coupleId, userId, {
+  let latest = [];
+  let active = true;
+  const sync = () => {
+    if (active) void syncGeofences(latest).catch(onError);
+  };
+  const stop = watchGeofences(coupleId, userId, {
     onData: (geofences) => {
-      void syncGeofences(geofences).catch(onError);
+      latest = geofences;
+      sync();
     },
     onError,
   });
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active') sync();
+  });
+  return () => {
+    active = false;
+    stop();
+    subscription.remove();
+  };
 }

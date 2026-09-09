@@ -1,4 +1,6 @@
-# Funcionalidades y estado de CoupleApp
+# Inventario histórico de CoupleApp (2026-08-13)
+
+Este documento conserva la revisión anterior. Para el comportamiento actual, los cambios de septiembre y las pruebas, consultar [IMPLEMENTACION_ESTADO.md](IMPLEMENTACION_ESTADO.md). Las frecuencias de ubicación y el sistema de notificaciones descritos aquí han sido sustituidos.
 
 Documento de referencia del comportamiento implementado en el repositorio. La fecha del inventario
 es 2026-08-13. El estado describe lo que puede demostrarse en el código actual; no presupone que

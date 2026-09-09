@@ -3,12 +3,15 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { requestPasswordReset } from '../services/accountService';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 
 export default function AuthScreen() {
@@ -17,6 +20,7 @@ export default function AuthScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -34,8 +38,14 @@ export default function AuthScreen() {
   }
 
   async function handleSubmit() {
-    if (!email.trim() || password.length < 6 || (mode === 'signup' && !name.trim())) {
-      setErrorMessage('Completa los campos; la contraseña debe tener al menos 6 caracteres.');
+    if (
+      !email.trim() ||
+      !password || (mode === 'signup' && password.length < 8) ||
+      (mode === 'signup' && !name.trim())
+    ) {
+      setErrorMessage(
+        mode === 'signup' ? 'Completa los campos y utiliza una contraseña de al menos 8 caracteres.' : 'Introduce tu correo y contraseña.',
+      );
       return;
     }
 
@@ -46,7 +56,9 @@ export default function AuthScreen() {
       if (mode === 'signup') {
         const data = await signUp({ email, password, name });
         if (!data.session) {
-          setSuccessMessage('Cuenta creada. Revisa tu correo para confirmar el registro.');
+          setSuccessMessage(
+            'Cuenta creada. Revisa tu correo para confirmar el registro.',
+          );
         }
       } else {
         await signIn({ email, password });
@@ -59,19 +71,23 @@ export default function AuthScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#FFF8FA' }}><KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
-      <View style={styles.card}>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 24 }}><View style={styles.card}>
         <Text style={styles.logo}>❤</Text>
         <Text style={styles.title}>CoupleApp</Text>
         <Text style={styles.subtitle}>
-          {mode === 'signup' ? 'Crea tu cuenta para empezar' : 'Entra en vuestro espacio'}
+          {mode === 'signup'
+            ? 'Crea tu cuenta para empezar'
+            : 'Entra en vuestro espacio'}
         </Text>
 
         {mode === 'signup' && (
           <TextInput
+            accessibilityLabel="Tu nombre"
+            editable={!submitting}
             autoCapitalize="words"
             maxLength={80}
             placeholder="Tu nombre"
@@ -80,7 +96,11 @@ export default function AuthScreen() {
             onChangeText={setName}
           />
         )}
+        <Text style={styles.fieldLabel}>Correo electrónico</Text>
         <TextInput
+          accessibilityLabel="Correo electrónico"
+          editable={!submitting}
+          autoCorrect={false}
           autoCapitalize="none"
           autoComplete="email"
           keyboardType="email-address"
@@ -89,20 +109,31 @@ export default function AuthScreen() {
           value={email}
           onChangeText={setEmail}
         />
+        <Text style={styles.fieldLabel}>Contraseña</Text>
         <TextInput
+          accessibilityLabel="Contraseña"
+          editable={!submitting}
           autoCapitalize="none"
           autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
           placeholder="Contraseña"
-          secureTextEntry
+          secureTextEntry={!showPassword}
           style={styles.input}
           value={password}
           onChangeText={setPassword}
         />
 
-        {!!errorMessage && <Text style={styles.error}>{errorMessage}</Text>}
-        {!!successMessage && <Text style={styles.success}>{successMessage}</Text>}
+        <TouchableOpacity accessibilityRole="button" accessibilityState={{ checked: showPassword }} onPress={() => setShowPassword(!showPassword)} style={{ minHeight: 44, justifyContent: 'center', marginBottom: 8 }}><Text style={{ color: '#8A2846' }}>{showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}</Text></TouchableOpacity>
+        {!!errorMessage && <Text accessibilityRole="alert" style={styles.error}>{errorMessage}</Text>}
+        {!!successMessage && (
+          <Text style={styles.success}>{successMessage}</Text>
+        )}
 
-        <TouchableOpacity disabled={submitting} style={styles.primaryButton} onPress={handleSubmit}>
+        <TouchableOpacity
+          disabled={submitting}
+          accessibilityRole="button"
+          style={[styles.primaryButton, submitting && { opacity: 0.5 }]}
+          onPress={handleSubmit}
+        >
           {submitting ? (
             <ActivityIndicator color="white" />
           ) : (
@@ -113,6 +144,33 @@ export default function AuthScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          disabled={submitting}
+          onPress={async () => {
+            if (!email.trim()) {
+              setErrorMessage(
+                'Escribe tu correo para recuperar la contraseña.',
+              );
+              return;
+            }
+            setSubmitting(true);
+            setErrorMessage('');
+            try {
+              await requestPasswordReset(email);
+              setSuccessMessage(
+                'Si la cuenta existe, recibirás un enlace para cambiar tu contraseña.',
+              );
+            } catch (error) {
+              setErrorMessage(getFriendlyAuthError(error));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          <Text style={styles.switchText}>He olvidado mi contraseña</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          disabled={submitting}
+          accessibilityRole="button"
           onPress={() => {
             setMode(mode === 'signup' ? 'signin' : 'signup');
             setErrorMessage('');
@@ -123,18 +181,34 @@ export default function AuthScreen() {
             {mode === 'signup' ? 'Ya tengo cuenta' : 'Crear una cuenta nueva'}
           </Text>
         </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      </View></ScrollView>
+    </KeyboardAvoidingView></SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: '#FFF8FA' },
-  card: { backgroundColor: 'white', borderRadius: 24, padding: 24 },
+  container: {
+    flex: 1,
+
+    backgroundColor: '#FFF8FA',
+  },
+  card: { width: '100%', maxWidth: 480, alignSelf: 'center', backgroundColor: 'white', borderRadius: 24, padding: 24 },
   logo: { fontSize: 46, color: '#D6336C', textAlign: 'center' },
-  title: { fontSize: 28, fontWeight: '800', color: '#8A2846', textAlign: 'center' },
-  subtitle: { color: '#666', textAlign: 'center', marginTop: 6, marginBottom: 20 },
+  title: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#8A2846',
+    textAlign: 'center',
+  },
+  subtitle: {
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 20,
+  },
+  fieldLabel: { fontSize: 14, color: '#30232A', fontWeight: '600', marginBottom: 6 },
   input: {
+    minHeight: 48,
     borderWidth: 1,
     borderColor: '#E5D9DD',
     borderRadius: 12,
@@ -152,5 +226,10 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   primaryButtonText: { color: 'white', fontWeight: '700' },
-  switchText: { color: '#8A2846', textAlign: 'center', marginTop: 18, fontWeight: '600' },
+  switchText: {
+    color: '#8A2846',
+    textAlign: 'center',
+    marginTop: 18,
+    fontWeight: '600',
+  },
 });

@@ -22,7 +22,15 @@ export async function getProfile(userId) {
     .single();
 
   if (error) throw error;
-  return normalizeProfile(data);
+  const profile = normalizeProfile(data);
+  if (data.avatar_url && !data.avatar_url.startsWith('https://')) {
+    const { data: signed, error: signedError } = await supabase.storage
+      .from('avatars')
+      .createSignedUrl(data.avatar_url, 3600);
+    if (signedError) throw signedError;
+    profile.avatarUrl = signed.signedUrl;
+  }
+  return profile;
 }
 
 export function watchProfile(userId, handlers) {

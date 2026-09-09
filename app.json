@@ -18,14 +18,14 @@
       }
     },
     "android": {
-      "package": "com.tuempresa.coupleapp"
+      "package": "com.esc.coupleapp"
     },
     "plugins": [
       [
         "expo-location",
         {
           "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": false,
+          "isAndroidForegroundServiceEnabled": true,
           "isIosBackgroundLocationEnabled": true,
           "locationAlwaysAndWhenInUsePermission": "Permite que CoupleApp use tu ubicación para calcular la distancia con tu pareja y detectar la llegada a lugares guardados."
         }

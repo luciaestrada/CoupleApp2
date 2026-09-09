@@ -1,65 +1,19 @@
-import * as Location from 'expo-location';
+import { getDeviceId } from './deviceService';
 import { supabase } from '../supabase/client';
 import { watchQuery } from './realtimeService';
-import {
-  getForegroundLocationPermission,
-  getLocationServicesPermission,
-} from './permissionService';
 
-const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
-
-async function publishLocation() {
-  const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
-  const { error } = await supabase.rpc('publish_location', {
-    p_lat: location.coords.latitude,
-    p_lng: location.coords.longitude,
-  });
-  if (error) throw error;
-}
-
-export function startLocationHeartbeat({
-  onError,
-  onPermissionAvailable,
-  onPermissionUnavailable,
-  onServicesAvailable,
-  onServicesUnavailable,
-}) {
-  let cancelled = false;
-  let intervalId;
-
-  async function start() {
-    const services = await getLocationServicesPermission();
-    if (cancelled) return;
-    if (!services.granted) {
-      onServicesUnavailable(services);
-      return;
-    }
-    onServicesAvailable(services);
-    const permission = await getForegroundLocationPermission();
-    if (cancelled) return;
-    if (!permission.granted) {
-      onPermissionUnavailable(permission);
-      return;
-    }
-    onPermissionAvailable(permission);
-    await publishLocation();
-    if (!cancelled) {
-      intervalId = setInterval(
-        () => publishLocation().catch(onError),
-        HEARTBEAT_INTERVAL_MS
-      );
-    }
-  }
-
-  start().catch(onError);
-  return () => {
-    cancelled = true;
-    if (intervalId) clearInterval(intervalId);
+function normalizeLocation(row) {
+  if (!row || !row.sharing) return null;
+  return {
+    lat: row.lat,
+    lng: row.lng,
+    updatedAt: row.captured_at,
+    receivedAt: row.updated_at,
+    accuracy: row.accuracy_m,
+    speed: row.speed_mps,
+    heading: row.heading,
   };
 }
-
 export function watchUserLocation(coupleId, userId, handlers) {
   return watchQuery({
     channelName: `location-${coupleId}-${userId}`,
@@ -68,14 +22,69 @@ export function watchUserLocation(coupleId, userId, handlers) {
     async load() {
       const { data, error } = await supabase
         .from('locations')
-        .select('lat,lng,updated_at')
+        .select(
+          'lat,lng,captured_at,updated_at,accuracy_m,speed_mps,heading,sharing',
+        )
         .eq('couple_id', coupleId)
         .eq('user_id', userId)
         .maybeSingle();
       if (error) throw error;
-      if (data === null) return null;
-      return { lat: data.lat, lng: data.lng, updatedAt: data.updated_at };
+      return normalizeLocation(data);
+    },
+    reduce: (previous, payload) => normalizeLocation(payload.new),
+    ...handlers,
+  });
+}
+export async function getLocationHistory(
+  coupleId,
+  userId,
+  before = new Date().toISOString(),
+) {
+  const { data, error } = await supabase
+    .from('location_history')
+    .select('id,lat,lng,recorded_at')
+    .eq('couple_id', coupleId)
+    .eq('user_id', userId)
+    .lt('recorded_at', before)
+    .gte('recorded_at', new Date(Date.now() - 24 * 3600_000).toISOString())
+    .order('recorded_at', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return data;
+}
+export async function clearLocationHistory() {
+  const { error } = await supabase.rpc('clear_location_history');
+  if (error) throw error;
+}
+
+export function watchLiveRequests(coupleId, handlers) {
+  return watchQuery({
+    channelName: `live-requests-${coupleId}`,
+    table: 'live_location_requests',
+    filter: `couple_id=eq.${coupleId}`,
+    async load() {
+      const { data, error } = await supabase
+        .from('live_location_requests')
+        .select('*')
+        .eq('couple_id', coupleId)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      return data;
     },
     ...handlers,
   });
+}
+export async function requestLiveLocation() {
+  const { error } = await supabase.rpc('request_live_location');
+  if (error) throw error;
+}
+export async function respondLiveLocation(id, accept) {
+  const { error } = await supabase.rpc('respond_live_location', {
+    p_id: id,
+    p_accept: accept,
+    p_device_id: getDeviceId(),
+  });
+  if (error) throw error;
 }

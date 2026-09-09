@@ -1,4 +1,4 @@
-package com.tuempresa.coupleapp
+package com.esc.coupleapp
 
 import android.os.Build
 import android.os.Bundle

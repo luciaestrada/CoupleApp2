@@ -87,9 +87,10 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.tuempresa.coupleapp'
+    namespace 'com.esc.coupleapp'
     defaultConfig {
-        applicationId 'com.tuempresa.coupleapp'
+        applicationId 'com.esc.coupleapp'
+        manifestPlaceholders.MAPS_API_KEY = System.getenv('GOOGLE_MAPS_ANDROID_API_KEY') ?: ''
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -110,9 +111,8 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Production signing is supplied by EAS or an external Gradle signing configuration.
+            // Never fall back to the development keystore for a release artifact.
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -179,4 +179,14 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+}
+
+// EAS file environment variable or a local, ignored configuration file.
+def googleServicesSource = System.getenv('GOOGLE_SERVICES_JSON')
+if (googleServicesSource) {
+    if (!file(googleServicesSource).exists()) throw new GradleException('GOOGLE_SERVICES_JSON does not exist')
+    copy { from file(googleServicesSource); into projectDir; rename { 'google-services.json' } }
+}
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
 }

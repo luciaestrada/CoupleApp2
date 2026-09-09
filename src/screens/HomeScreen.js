@@ -1,277 +1,65 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  AppState,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePairedAppContext } from '../contexts/AppContext';
 import { sendLove, watchStreaks } from '../services/streakService';
-import { startLocationHeartbeat, watchUserLocation } from '../services/locationService';
+import { watchUserLocation } from '../services/locationService';
+import { useTracking } from '../context/TrackingContext';
 import { haversineDistanceKm } from '../utils/haversine';
 import { daysTogether, isStreakBroken, todayInMadrid } from '../utils/dateUtils';
-import {
-  getForegroundLocationPermission,
-  getLocationServicesPermission,
-  permissionNeedsSettings,
-  requestForegroundLocationPermission,
-  requestLocationServicesPermission,
-} from '../services/permissionService';
-import { showLocationSettingsAlert, showPermissionSettingsAlert } from '../utils/permissionUi';
+import { locationAgeLabel, effectiveMode } from '../features/location/policy';
+import { Action, Banner, MenuRow } from '../ui/components';
+import { colors } from '../ui/theme';
 
-const LOCATION_FRESHNESS_MS = 15 * 60 * 1000;
-
-export default function HomeScreen() {
-  const { userId, couple, partnerId } = usePairedAppContext();
+export default function HomeScreen({ navigation }) {
+  const { userId, couple, partnerId, userProfile } = usePairedAppContext();
+  const tracking = useTracking();
   const [streaks, setStreaks] = useState(couple.streaks ?? []);
-  const [myCoords, setMyCoords] = useState(null);
-  const [partnerCoords, setPartnerCoords] = useState(null);
-  const [error, setError] = useState(null);
-  const [sendingLove, setSendingLove] = useState(false);
-  const [locationPermission, setLocationPermission] = useState(null);
-  const [locationServices, setLocationServices] = useState(null);
-  const [locationHeartbeatRevision, setLocationHeartbeatRevision] = useState(0);
-  const [requestingLocation, setRequestingLocation] = useState(false);
+  const [mine, setMine] = useState(null), [partner, setPartner] = useState(null);
+  const [error, setError] = useState(null), [sending, setSending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    return watchStreaks(couple.id, { onData: setStreaks, onError: setError });
-  }, [couple?.id]);
-
-  // Publica mi ubicación periódicamente
-  useEffect(() => {
-    return startLocationHeartbeat({
-      onError: setError,
-      onPermissionAvailable: setLocationPermission,
-      onPermissionUnavailable: setLocationPermission,
-      onServicesAvailable: setLocationServices,
-      onServicesUnavailable: setLocationServices,
-    });
-  }, [locationHeartbeatRevision, userId]);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      void Promise.all([getLocationServicesPermission(), getForegroundLocationPermission()])
-        .then(([services, permission]) => {
-          setLocationServices(services);
-          setLocationPermission(permission);
-          if (services.granted && permission.granted) {
-            setLocationHeartbeatRevision((revision) => revision + 1);
-          }
-        })
-        .catch(setError);
-    });
-    return () => subscription.remove();
-  }, []);
-
-  // Escucha mi propia ubicación publicada (para tener el mismo dato que ve la pareja)
-  useEffect(() => {
-    return watchUserLocation(couple.id, userId, { onData: setMyCoords, onError: setError });
-  }, [couple.id, userId]);
-
-  // Escucha la ubicación de la pareja
-  useEffect(() => {
-    return watchUserLocation(couple.id, partnerId, {
-      onData: setPartnerCoords,
-      onError: setError,
-    });
-  }, [couple.id, partnerId]);
-
-  function getDistanceText() {
-    if (locationServices && !locationServices.granted) return 'Servicios de ubicación apagados';
-    if (locationPermission && !locationPermission.granted) return 'Ubicación desactivada';
-    if (!myCoords) return 'Esperando tu ubicación';
-    if (!partnerCoords) return 'Esperando a tu pareja';
-
-    const oldestUpdate = Math.min(
-      new Date(myCoords.updatedAt).getTime(),
-      new Date(partnerCoords.updatedAt).getTime()
-    );
-    if (oldestUpdate + LOCATION_FRESHNESS_MS < now) return 'Ubicación sin actualizar';
-
-    const distanceKm = haversineDistanceKm(
-      myCoords.lat,
-      myCoords.lng,
-      partnerCoords.lat,
-      partnerCoords.lng
-    );
-    return distanceKm < 1
-      ? `${Math.round(distanceKm * 1000)} m`
-      : `${distanceKm.toFixed(1)} km`;
+    const stopStreaks = watchStreaks(couple.id, { onData: setStreaks, onError: setError });
+    const stopMine = watchUserLocation(couple.id, userId, { onData: setMine, onError: setError });
+    const stopPartner = watchUserLocation(couple.id, partnerId, { onData: setPartner, onError: setError });
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => { stopStreaks(); stopMine(); stopPartner(); clearInterval(timer); };
+  }, [couple.id, userId, partnerId]);
+  const myStreak = streaks.find((item) => item.userId === userId);
+  const partnerStreak = streaks.find((item) => item.userId === partnerId);
+  const sentToday = myStreak?.lastConfirmedDay === todayInMadrid();
+  const paused = effectiveMode(tracking.settings, now) === 'off';
+  const recent = mine && partner && Math.min(Date.parse(mine.updatedAt), Date.parse(partner.updatedAt)) > now - 120000;
+  const distance = recent ? haversineDistanceKm(mine.lat, mine.lng, partner.lat, partner.lng) : null;
+  const distanceLabel = distance !== null ? distance < 1 ? `${Math.round(distance * 1000)} m` : `${distance.toFixed(1)} km` : paused ? 'Compartes cuando tú quieras' : partner ? 'Última ubicación disponible' : 'Aún no hay una ubicación compartida';
+  async function handleLove() {
+    if (sending || sentToday) return;
+    setSending(true); setError(null);
+    try { await sendLove(couple.id); } catch (e) { setError(e); } finally { setSending(false); }
   }
-
-  async function handleSendLove() {
-    setSendingLove(true);
-    setError(null);
-    try {
-      await sendLove(couple.id);
-    } catch (nextError) {
-      setError(nextError);
-    } finally {
-      setSendingLove(false);
-    }
-  }
-
-  async function handleEnableLocation() {
-    setRequestingLocation(true);
-    setError(null);
-    try {
-      let services = await getLocationServicesPermission();
-      if (!services.granted) {
-        services = await requestLocationServicesPermission();
-      }
-      setLocationServices(services);
-      if (!services.granted) {
-        showLocationSettingsAlert(
-          'Activa los servicios de ubicación',
-          'La ubicación del dispositivo está apagada. Actívala para calcular la distancia.'
-        );
-        return;
-      }
-      const current = await getForegroundLocationPermission();
-      if (permissionNeedsSettings(current)) {
-        showPermissionSettingsAlert(
-          'Activa la ubicación',
-          'El permiso está bloqueado. Ábrelo en Ajustes para poder calcular la distancia.'
-        );
-        setLocationPermission(current);
-        return;
-      }
-
-      const permission = current.granted
-        ? current
-        : await requestForegroundLocationPermission();
-      setLocationPermission(permission);
-      if (permission.granted) {
-        setLocationHeartbeatRevision((revision) => revision + 1);
-      } else if (permissionNeedsSettings(permission)) {
-        showPermissionSettingsAlert(
-          'Activa la ubicación',
-          'El permiso está bloqueado. Ábrelo en Ajustes para poder calcular la distancia.'
-        );
-      } else {
-        Alert.alert('Ubicación no activada', 'Puedes volver a intentarlo cuando quieras.');
-      }
-    } catch (nextError) {
-      setError(nextError);
-    } finally {
-      setRequestingLocation(false);
-    }
-  }
-
-  const myStreak = streaks.find((streak) => streak.userId === userId) ?? {
-    count: 0,
-    lastConfirmedDay: null,
-  };
-  const partnerStreak = streaks.find((streak) => streak.userId === partnerId) ?? {
-    count: 0,
-    lastConfirmedDay: null,
-  };
-  const sentLoveToday = myStreak.lastConfirmedDay === todayInMadrid();
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.daysCounter}>
-        💞 {daysTogether(couple.startDate)} días juntos
-      </Text>
-
-      {error && <Text style={styles.error}>{error.message}</Text>}
-
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>Rachas de amor</Text>
-        <View style={styles.streakRow}>
-          <View style={styles.streakColumn}>
-            <Text style={styles.streakOwner}>Tú</Text>
-            <Text style={styles.streakNumber}>🔥 {myStreak.count}</Text>
-            {myStreak.count > 0 && isStreakBroken(myStreak.lastConfirmedDay) && (
-              <Text style={styles.brokenText}>Racha interrumpida</Text>
-            )}
-          </View>
-          <View style={styles.streakDivider} />
-          <View style={styles.streakColumn}>
-            <Text style={styles.streakOwner}>Tu pareja</Text>
-            <Text style={styles.streakNumber}>🔥 {partnerStreak.count}</Text>
-            {partnerStreak.count > 0 && isStreakBroken(partnerStreak.lastConfirmedDay) && (
-              <Text style={styles.brokenText}>Racha interrumpida</Text>
-            )}
-          </View>
-        </View>
-        <TouchableOpacity
-          style={styles.loveButton}
-          disabled={sendingLove || sentLoveToday}
-          onPress={handleSendLove}
-        >
-          {sendingLove ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.loveButtonText}>
-              {sentLoveToday ? 'Amor enviado hoy ✓' : 'Enviar amor de hoy 💜'}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>Distancia</Text>
-        <Text style={styles.distanceText}>{getDistanceText()}</Text>
-        {((locationServices && !locationServices.granted) ||
-          (locationPermission && !locationPermission.granted)) && (
-          <TouchableOpacity
-            disabled={requestingLocation}
-            onPress={handleEnableLocation}
-            style={styles.permissionButton}
-          >
-            <Text style={styles.permissionButtonText}>
-              {requestingLocation ? 'Comprobando…' : 'Activar ubicación'}
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
+  return <ScrollView contentContainerStyle={styles.page}>
+    <View style={styles.hero}>
+      <Text style={styles.eyebrow}>{userProfile?.name ? `Hola, ${userProfile.name}` : 'Vuestro espacio'}</Text>
+      <Text style={styles.days}>{daysTogether(couple.startDate)}</Text><Text style={styles.heroCopy}>días compartiendo la vida</Text>
     </View>
-  );
+    {error && <Banner>{error.message}</Banner>}
+    <View style={styles.card}>
+      <Text style={styles.title}>Un detalle cada día</Text>
+      <Text style={styles.description}>{sentToday ? 'Tu cariño de hoy ya está enviado.' : 'Hazle saber que estás pensando en vuestra relación.'}</Text>
+      <View style={styles.streaks}>{[[myStreak, 'Tú'], [partnerStreak, 'Tu pareja']].map(([streak, label]) => <View key={label} style={styles.streak}>
+        <Text style={styles.description}>{label}</Text><Text style={styles.count}>{streak?.count ?? 0}<Text style={{ fontSize: 14, fontWeight: '400' }}> días</Text></Text>
+        {(streak?.count ?? 0) > 0 && isStreakBroken(streak.lastConfirmedDay) && <Text style={styles.description}>Podéis empezar de nuevo</Text>}
+      </View>)}</View>
+      <Action title={sentToday ? 'Amor enviado hoy ✓' : 'Enviar un poco de amor'} onPress={handleLove} disabled={sentToday} loading={sending} secondary={sentToday} />
+    </View>
+    <View style={styles.card}>
+      <Text style={styles.eyebrow}>CERCA, AUNQUE ESTÉIS LEJOS</Text>
+      <Text style={styles.distance}>{distanceLabel}</Text>
+      <Text style={styles.description}>{paused ? 'Tu ubicación está pausada. Puedes activarla desde el mapa.' : partner ? locationAgeLabel(partner.updatedAt, now) : 'Cada persona decide cuándo compartir su posición.'}</Text>
+      <Action title="Abrir vuestro mapa" secondary onPress={() => navigation.navigate('Mapa')} />
+    </View>
+    <Text style={styles.title}>Para vosotros</Text>
+    <MenuRow title="Vuestra conversación" description="Un mensaje también puede acercaros" symbol="♡" onPress={() => navigation.navigate('Chat')} />
+    <MenuRow title="Momentos y fechas" description="Fotos, estados y días que recordar" symbol="✦" onPress={() => navigation.navigate('Recuerdos')} />
+  </ScrollView>;
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
-  daysCounter: {
-    fontSize: 20,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#FF6B81',
-  },
-  card: {
-    backgroundColor: '#FFF0F3',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  cardLabel: { fontSize: 14, color: '#888', marginBottom: 8 },
-  streakRow: { alignItems: 'stretch', flexDirection: 'row', marginBottom: 16, width: '100%' },
-  streakColumn: { alignItems: 'center', flex: 1, minHeight: 70 },
-  streakDivider: { backgroundColor: '#F9A8C4', width: 1 },
-  streakOwner: { color: '#777', fontSize: 13, fontWeight: '700', marginBottom: 4 },
-  streakNumber: { fontSize: 28, fontWeight: '800' },
-  brokenText: { color: '#B42318', fontSize: 11, marginTop: 3 },
-  loveButton: {
-    backgroundColor: '#FF6B81',
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-  },
-  loveButtonText: { color: '#fff', fontWeight: '700' },
-  distanceText: { fontSize: 20, fontWeight: '800', textAlign: 'center' },
-  permissionButton: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8 },
-  permissionButtonText: { color: '#D6336C', fontWeight: '700' },
-  error: { color: '#B42318', marginBottom: 12, textAlign: 'center' },
-});
+const styles = StyleSheet.create({ page: { padding: 20, paddingBottom: 32, gap: 16, backgroundColor: colors.background, flexGrow: 1 }, hero: { padding: 24, borderRadius: 24, backgroundColor: colors.primarySoft, alignItems: 'center' }, eyebrow: { fontSize: 12, fontWeight: '700', letterSpacing: 1, color: colors.primary }, days: { fontSize: 64, fontWeight: '800', color: colors.primary, marginVertical: 4 }, heroCopy: { fontSize: 17, color: colors.text }, card: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: 20, padding: 20, gap: 12 }, title: { fontSize: 20, fontWeight: '700', color: colors.text }, description: { fontSize: 14, lineHeight: 21, color: colors.muted }, streaks: { flexDirection: 'row', gap: 16, marginVertical: 4 }, streak: { flex: 1, backgroundColor: colors.background, padding: 14, borderRadius: 14 }, count: { fontSize: 28, color: colors.primary, fontWeight: '700' }, distance: { fontSize: 22, fontWeight: '700', color: colors.text } });
