@@ -4,6 +4,7 @@ import type { Database } from '../_shared/database.types.ts';
 type MaintenanceResult = {
   removedStories: number;
   removedAccounts: number;
+  removedMedia: number;
   errors: string[];
 };
 
@@ -32,8 +33,39 @@ export default {
       const result: MaintenanceResult = {
         removedStories: 0,
         removedAccounts: 0,
+        removedMedia: 0,
         errors: [],
       };
+
+      try {
+        const { error: checkinError } = await admin.from('daily_checkins').delete()
+          .lte('expires_at', new Date().toISOString());
+        if (checkinError) throw checkinError;
+      } catch (error) {
+        result.errors.push(`No se pudieron limpiar los check-ins: ${errorMessage(error)}`);
+      }
+      try {
+        const { data: abandoned, error: loadError } = await admin.from('media_assets')
+          .select('id').is('published_at', null).lte('expires_at', new Date().toISOString()).limit(100);
+        if (loadError) throw loadError;
+        if (abandoned?.length) {
+          const { error } = await admin.from('media_assets').delete().in('id', abandoned.map(row => row.id))
+            .is('published_at', null).lte('expires_at', new Date().toISOString());
+          if (error) throw error;
+        }
+        const { data: jobs, error: jobsError } = await admin.from('media_deletions')
+          .select('id,bucket_id,object_path').order('id').limit(100);
+        if (jobsError) throw jobsError;
+        for (const job of jobs ?? []) {
+          const { error } = await admin.storage.from(job.bucket_id).remove([job.object_path]);
+          if (error) throw error;
+          const { error: deleteError } = await admin.from('media_deletions').delete().eq('id', job.id);
+          if (deleteError) throw deleteError;
+          result.removedMedia += 1;
+        }
+      } catch (error) {
+        result.errors.push(`No se pudieron limpiar los archivos compartidos: ${errorMessage(error)}`);
+      }
 
       try {
         const { data: expiredStories, error: storiesError } = await admin
@@ -73,6 +105,18 @@ export default {
           .limit(10);
         if (error) throw error;
         for (const account of requests ?? []) {
+          const { data: assets, error: assetsError } = await admin.from('media_assets')
+            .select('id').eq('author_id', account.user_id).limit(100);
+          if (assetsError) throw assetsError;
+          if (assets?.length) {
+            const { error } = await admin.from('media_assets').delete().in('id', assets.map(row => row.id));
+            if (error) throw error;
+            continue;
+          }
+          const { count: pendingMedia, error: pendingError } = await admin.from('media_deletions')
+            .select('id', { count: 'exact', head: true }).eq('author_id', account.user_id);
+          if (pendingError) throw pendingError;
+          if (pendingMedia) continue;
           const { data: stories, error: storiesError } = await admin
             .from('stories')
             .select('id,image_path')

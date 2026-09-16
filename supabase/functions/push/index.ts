@@ -42,11 +42,10 @@ export default {
                 body: JSON.stringify(
                   pending.map((item) => ({
                     to: item.push_token,
-                    title: item.title,
-                    body: item.body,
+                    ...(item.data && typeof item.data === 'object' && !Array.isArray(item.data) && item.data.type === 'tracking_control'
+                      ? { contentAvailable: true }
+                      : { title: item.title, body: item.body, channelId: item.kind, sound: 'default' }),
                     data: item.data,
-                    channelId: item.kind,
-                    sound: 'default',
                     ttl: Math.max(
                       0,
                       Math.min(

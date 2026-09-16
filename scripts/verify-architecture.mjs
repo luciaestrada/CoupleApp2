@@ -88,7 +88,7 @@ for (const match of runtimeSource.matchAll(
 )) {
   const tableName = match[1];
   if (['stories', 'avatars'].includes(tableName)) continue;
-  if (!setupSql.includes(`create table public.${tableName} (`)) {
+  if (!new RegExp(`create table (?:if not exists )?public\\.${tableName}\\s*\\(`, 'i').test(setupSql)) {
     fail(`la tabla ${tableName} usada por la app no existe en setup.sql.`);
   }
 }
@@ -324,14 +324,16 @@ if (
   );
 }
 if (
-  appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes(
+  !appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes(
     'remote-notification',
   )
 ) {
   fail(
-    'iOS no debe declarar recepción push silenciosa si la app solo muestra avisos visibles.',
+    'iOS debe declarar recepción en segundo plano para las solicitudes del mapa.',
   );
 }
+requireText(readFileSync(join(root,'src/features/location/trackingWake.js'),'utf8'),
+  'syncTrackingConfig', 'Los avisos de control deben revalidar la sesión en el servidor.');
 
 const specialDatesScreen = readFileSync(
   join(root, 'src', 'screens', 'SpecialDatesScreen.js'),
@@ -359,9 +361,11 @@ const statusScreen = readFileSync(
 );
 requireText(
   statusScreen,
-  'clearMyStatus',
-  'la interfaz debe permitir retirar el estado propio.',
+  'CheckinCard',
+  'el estado debe compartir el editor de check-in.',
 );
+requireText(readFileSync(join(root, 'src', 'ui', 'CheckinCard.js'), 'utf8'),
+  'clearCheckin', 'la interfaz debe permitir retirar el check-in propio.');
 
 const geofenceScreen = readFileSync(
   join(root, 'src', 'screens', 'GeofenceSetupScreen.js'),

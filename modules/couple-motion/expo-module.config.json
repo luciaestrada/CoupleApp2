@@ -1,0 +1,1 @@
+{"platforms":["apple","android"],"apple":{"modules":["CoupleMotionModule"]},"android":{"modules":["expo.modules.couplemotion.CoupleMotionModule"]}}

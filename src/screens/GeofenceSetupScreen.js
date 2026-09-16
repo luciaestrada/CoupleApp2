@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
+import OpenMap from '../features/map/OpenMap';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import { usePairedAppContext } from '../contexts/AppContext';
 import {
@@ -253,10 +254,31 @@ export default function GeofenceSetupScreen() {
               )}
             </MapView>
           ) : (
-            <Text style={styles.hint}>
-              El mapa no está disponible en esta instalación. Puedes guardar tu
-              posición actual o introducir coordenadas.
-            </Text>
+            <OpenMap
+              ref={map}
+              style={{ height: 280, marginVertical: 12, borderRadius: 16 }}
+              onSelectPoint={selectPoint}
+              points={[
+                ...places.map((p) => ({
+                  ...p,
+                  title: p.name,
+                  color: '#4263EB',
+                  radius: p.radiusMeters,
+                })),
+                ...(hasPoint
+                  ? [
+                      {
+                        lat,
+                        lng,
+                        title: 'Nuevo lugar',
+                        color: '#A62450',
+                        selected: true,
+                        radius: meters >= 50 && meters <= 1000 ? meters : 0,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           )}
           <Text style={styles.hint}>
             Toca el mapa para elegir un punto o utiliza tu posición actual.

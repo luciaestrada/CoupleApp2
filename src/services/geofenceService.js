@@ -2,7 +2,8 @@ import * as Location from 'expo-location';
 import { AppState } from 'react-native';
 import { supabase } from '../supabase/client';
 import { watchQuery } from './realtimeService';
-import { MAX_GEOFENCE_REGIONS, registerGeofences } from './locationTask';
+import { watchSettings } from './settingsService';
+import { MAX_GEOFENCE_REGIONS, registerGeofences, watchGeofencePause } from './locationTask';
 
 export { MAX_GEOFENCE_REGIONS };
 
@@ -65,9 +66,14 @@ export async function syncGeofences(geofences) {
 export function startGeofenceSync(coupleId, userId, { onError }) {
   let latest = [];
   let active = true;
+  let permitted = false;
   const sync = () => {
-    if (active) void syncGeofences(latest).catch(onError);
+    if (active) void syncGeofences(permitted ? latest : []).catch(onError);
   };
+  const stopSettings = watchSettings(userId, {
+    onData: settings => { permitted = settings.geofence_paused !== true && (settings.shared_precision !== 'approximate' || settings.approximate_place_events === true); sync(); },
+    onError: error => { permitted = false; sync(); onError(error); },
+  });
   const stop = watchGeofences(coupleId, userId, {
     onData: (geofences) => {
       latest = geofences;
@@ -78,9 +84,12 @@ export function startGeofenceSync(coupleId, userId, { onError }) {
   const subscription = AppState.addEventListener('change', (state) => {
     if (state === 'active') sync();
   });
+  const stopPause = watchGeofencePause(sync);
   return () => {
     active = false;
     stop();
     subscription.remove();
+    stopPause();
+    stopSettings();
   };
 }

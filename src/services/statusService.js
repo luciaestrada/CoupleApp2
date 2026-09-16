@@ -6,12 +6,13 @@ const STATUS_DURATION_MS = 24 * 60 * 60 * 1000;
 function normalizeStatus(profile) {
   if (!profile?.status_updated_at) return null;
   const updatedAt = new Date(profile.status_updated_at);
-  if (updatedAt.getTime() + STATUS_DURATION_MS <= Date.now()) return null;
+  const expiresAt = profile.status_expires_at ? Date.parse(profile.status_expires_at) : updatedAt.getTime() + STATUS_DURATION_MS;
+  if (expiresAt <= Date.now()) return null;
   return {
     text: profile.status_text,
     emoji: profile.status_emoji,
     updatedAt: profile.status_updated_at,
-    expiresAt: updatedAt.getTime() + STATUS_DURATION_MS,
+    expiresAt,
   };
 }
 
@@ -25,7 +26,7 @@ export function watchStatus(coupleId, userId, handlers) {
     async load() {
       const { data, error } = await supabase
         .from('profiles')
-        .select('status_text,status_emoji,status_updated_at')
+        .select('*')
         .eq('id', userId)
         .single();
       if (error) throw error;

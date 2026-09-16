@@ -1,6 +1,5 @@
 import * as Location from 'expo-location';
 import * as Crypto from 'expo-crypto';
-import { Platform } from 'react-native';
 import * as TaskManager from 'expo-task-manager';
 import { supabase } from '../supabase/client';
 
@@ -10,6 +9,26 @@ export const MAX_GEOFENCE_REGIONS = 20;
 let registrationQueue = Promise.resolve();
 
 const EVENT_QUEUE = 'coupleapp.geofence.events';
+const PAUSED_KEY = 'coupleapp.geofence.paused';
+const pauseListeners = new Set();
+export function watchGeofencePause(listener) {
+  pauseListeners.add(listener);
+  return () => pauseListeners.delete(listener);
+}
+export function areGeofencesPaused() {
+  return localStorage.getItem(PAUSED_KEY) === 'true';
+}
+export async function pauseGeofences() {
+  // Persist before any await: delayed callbacks and registrations must observe it.
+  localStorage.setItem(PAUSED_KEY, 'true');
+  localStorage.removeItem(EVENT_QUEUE);
+  pauseListeners.forEach(listener => listener(true));
+  return registerGeofences([]);
+}
+export function resumeGeofences() {
+  localStorage.removeItem(PAUSED_KEY);
+  pauseListeners.forEach(listener => listener(false));
+}
 let flushing = false;
 function readEvents() {
   try {
@@ -19,6 +38,7 @@ function readEvents() {
   }
 }
 export async function flushGeofenceEvents() {
+  if (areGeofencesPaused()) { localStorage.removeItem(EVENT_QUEUE); return; }
   if (flushing) return;
   flushing = true;
   try {
@@ -32,6 +52,7 @@ export async function flushGeofenceEvents() {
       if (refreshError) return;
     }
     for (const event of readEvents()) {
+      if (areGeofencesPaused()) break;
       if (
         event.userId !== session.user.id ||
         Date.parse(event.recordedAt) < Date.now() - 30 * 60_000
@@ -42,10 +63,11 @@ export async function flushGeofenceEvents() {
         );
         continue;
       }
-      const { error } = await supabase.rpc('record_geofence_entry_v2', {
+      const { error } = await supabase.rpc('record_geofence_transition', {
         p_geofence_id: event.geofenceId,
         p_event_id: event.id,
         p_recorded_at: event.recordedAt,
+        p_transition: event.transition ?? 'enter',
       });
       if (error && !['42501', '22023', 'P0002'].includes(error.code)) break;
       localStorage.setItem(
@@ -60,6 +82,7 @@ export async function flushGeofenceEvents() {
 
 if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
   TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
+    if (areGeofencesPaused()) return;
     if (error || !data?.region?.identifier) return;
     const geofenceId = data.region.identifier;
     const key = `coupleapp.geofence.state.${geofenceId}`;
@@ -68,15 +91,14 @@ if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
     localStorage.setItem(key, entering ? 'inside' : 'outside');
     // iOS reports the initial region state at registration. It isn't a new arrival.
     if (
-      !entering ||
-      previous === 'inside' ||
-      (Platform.OS === 'ios' && !previous)
+      previous === (entering ? 'inside' : 'outside') ||
+      !previous
     )
       return;
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session) return;
+    if (!session || areGeofencesPaused()) return;
     const events = readEvents().filter(
       (item) => item.userId === session.user.id,
     );
@@ -85,6 +107,7 @@ if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
       geofenceId,
       userId: session.user.id,
       recordedAt: new Date().toISOString(),
+      transition: entering ? 'enter' : 'exit',
     });
     localStorage.setItem(EVENT_QUEUE, JSON.stringify(events.slice(-40)));
     await flushGeofenceEvents();
@@ -93,6 +116,7 @@ if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
 
 async function replaceRegisteredGeofences(geofences) {
   const permission = await Location.getBackgroundPermissionsAsync();
+  if (areGeofencesPaused()) geofences = [];
   if (!permission.granted) {
     // Expo rejects even hasStartedGeofencingAsync without this permission.
     localStorage.removeItem('coupleapp.geofence.signature');
@@ -120,6 +144,7 @@ async function replaceRegisteredGeofences(geofences) {
     if (!(await Location.getBackgroundPermissionsAsync()).granted) return false;
     throw error;
   }
+  if (areGeofencesPaused()) geofences = [];
   if (geofences.length === 0) {
     if (alreadyRegistered) await Location.stopGeofencingAsync(GEOFENCE_TASK);
     localStorage.removeItem('coupleapp.geofence.signature');
@@ -143,6 +168,10 @@ async function replaceRegisteredGeofences(geofences) {
       notifyOnExit: true,
     })),
   );
+  if (areGeofencesPaused()) {
+    await Location.stopGeofencingAsync(GEOFENCE_TASK);
+    return false;
+  }
   localStorage.setItem('coupleapp.geofence.signature', signature);
   return true;
 }

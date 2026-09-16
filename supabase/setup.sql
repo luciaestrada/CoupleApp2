@@ -28,6 +28,9 @@ drop policy if exists avatar_read on storage.objects;
 drop policy if exists avatar_write on storage.objects;
 drop policy if exists avatar_delete on storage.objects;
 drop table if exists public.live_location_requests cascade;
+drop table if exists public.map_view_sessions cascade;
+drop table if exists public.trips cascade;
+drop table if exists public.activity_states cascade;
 drop table if exists public.notification_deliveries cascade;
 drop table if exists public.devices cascade;
 drop table if exists public.user_settings cascade;
@@ -1936,4 +1939,1166 @@ create trigger status_notification after update of status_text,status_emoji on p
 revoke all on function public.queue_status_notification() from public;
 
 notify pgrst,'reload schema';
+
+alter table public.user_settings add column if not exists auto_live_enabled boolean not null default false;
+
+-- A viewer renews a short lease only while their map is visible.
+create table if not exists public.map_view_sessions (
+  viewer_id uuid not null references public.profiles(id) on delete cascade,
+  device_id uuid not null references public.devices(id) on delete cascade,
+  session_id uuid not null,
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  target_id uuid not null references public.profiles(id) on delete cascade,
+  started_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  primary key(viewer_id,device_id),
+  check(viewer_id<>target_id)
+);
+create index if not exists map_view_sessions_target_idx on public.map_view_sessions(target_id,expires_at);
+alter table public.map_view_sessions enable row level security;
+revoke all on public.map_view_sessions from anon, authenticated;
+drop policy if exists map_sessions_read on public.map_view_sessions;
+create policy map_sessions_read on public.map_view_sessions for select to authenticated
+  using ((viewer_id=auth.uid() or target_id=auth.uid()) and couple_id=public.current_couple_id());
+grant select on public.map_view_sessions to authenticated;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime'
+    and schemaname='public' and tablename='map_view_sessions') then
+    alter publication supabase_realtime add table public.map_view_sessions;
+  end if;
+end $$;
+
+create or replace function public.set_auto_live_enabled(p_enabled boolean)
+returns public.user_settings language plpgsql security definer set search_path=public as $$
+declare result public.user_settings;
+begin
+  if auth.uid() is null or p_enabled is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  insert into public.user_settings(user_id) values(auth.uid()) on conflict do nothing;
+  update public.user_settings set auto_live_enabled=p_enabled,updated_at=now()
+    where user_id=auth.uid() returning * into result;
+  return result;
+end $$;
+
+create or replace function public.invalidate_map_sessions()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if not new.auto_live_enabled or new.location_mode='off'
+    or new.tracking_device_id is distinct from old.tracking_device_id then
+    update public.map_view_sessions set expires_at=now() where target_id=new.user_id and expires_at>now();
+  end if;
+  return new;
+end $$;
+drop trigger if exists invalidate_map_sessions on public.user_settings;
+create trigger invalidate_map_sessions after update on public.user_settings
+  for each row execute function public.invalidate_map_sessions();
+
+create or replace function public.renew_map_view(p_device_id uuid,p_session_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); target uuid; settings public.user_settings;
+  previous public.map_view_sessions; deadline timestamptz;
+begin
+  if auth.uid() is null or p_session_id is null or not public.is_complete_couple(c)
+    or not exists(select 1 from public.devices where id=p_device_id and user_id=auth.uid()) then
+    raise exception 'Dispositivo o pareja no disponibles' using errcode='42501';
+  end if;
+  select user_id into target from public.couple_members where couple_id=c and user_id<>auth.uid();
+  -- Serialize renewals with consent changes and pauses.
+  select * into settings from public.user_settings where user_id=target for update;
+  if settings.user_id is null or not settings.auto_live_enabled then
+    return jsonb_build_object('status','consent_required');
+  end if;
+  if settings.location_mode='off' or settings.tracking_device_id is null
+    or (settings.location_mode='live' and settings.live_until<=now()) then
+    return jsonb_build_object('status','paused');
+  end if;
+  select * into previous from public.map_view_sessions where viewer_id=auth.uid() and device_id=p_device_id;
+  if previous.session_id=p_session_id and previous.started_at+interval '15 minutes'<=now() then
+    return jsonb_build_object('status','expired');
+  end if;
+  deadline:=least(now()+interval '90 seconds',
+    (case when previous.session_id=p_session_id then previous.started_at else now() end)+interval '15 minutes');
+  insert into public.map_view_sessions(viewer_id,device_id,session_id,couple_id,target_id,expires_at)
+    values(auth.uid(),p_device_id,p_session_id,c,target,deadline)
+    on conflict(viewer_id,device_id) do update set session_id=excluded.session_id,couple_id=c,target_id=target,
+      started_at=case when map_view_sessions.session_id=p_session_id then map_view_sessions.started_at else now() end,
+      expires_at=deadline;
+  -- Only a wake hint: the receiver revalidates authenticated state, never trusts this payload.
+  if (previous.expires_at is null or previous.expires_at<=now() or previous.session_id<>p_session_id)
+    and not exists(select 1 from public.notifications where user_id=target
+      and data->>'type'='tracking_control' and created_at>now()-interval '1 minute') then
+    insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+      values(target,c,'map:'||extensions.gen_random_uuid(),'Ubicación bajo demanda','Actualización de sesión','live',
+        jsonb_build_object('type','tracking_control','screen','Mapa'),deadline);
+  end if;
+  return jsonb_build_object('status','requested','expiresAt',deadline);
+end $$;
+
+create or replace function public.end_map_view(p_device_id uuid,p_session_id uuid)
+returns void language plpgsql security definer set search_path=public as $$
+begin
+  update public.map_view_sessions set expires_at=now()
+    where viewer_id=auth.uid() and device_id=p_device_id and session_id=p_session_id;
+end $$;
+
+create or replace function public.get_tracking_config(p_device_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare s public.user_settings; deadline timestamptz;
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  select * into s from public.user_settings where user_id=auth.uid();
+  if s.user_id is null or s.tracking_device_id is distinct from p_device_id
+    or not exists(select 1 from public.devices where id=p_device_id and user_id=auth.uid()) then return null; end if;
+  if s.location_mode='balanced' and s.auto_live_enabled then
+    select max(expires_at) into deadline from public.map_view_sessions
+      where target_id=auth.uid() and couple_id=public.current_couple_id()
+      and public.is_complete_couple(couple_id) and expires_at>now();
+  end if;
+  return to_jsonb(s)||jsonb_build_object('userId',auth.uid(),'auto_live_until',deadline);
+end $$;
+
+revoke all on function public.set_auto_live_enabled(boolean) from public;
+revoke all on function public.invalidate_map_sessions() from public;
+revoke all on function public.renew_map_view(uuid,uuid) from public;
+revoke all on function public.end_map_view(uuid,uuid) from public;
+revoke all on function public.get_tracking_config(uuid) from public;
+grant execute on function public.set_auto_live_enabled(boolean) to authenticated;
+grant execute on function public.renew_map_view(uuid,uuid) to authenticated;
+grant execute on function public.end_map_view(uuid,uuid) to authenticated;
+grant execute on function public.get_tracking_config(uuid) to authenticated;
+
+alter table public.user_settings add column if not exists location_options jsonb not null default '{"normal_distance":50,"normal_interval":120,"live_interval":20,"battery_threshold":20,"low_battery_mode":"balanced","share_battery":true,"share_activity":true,"save_trips":true,"motion_assist":true}';
+alter table public.user_settings add column if not exists event_options jsonb not null default '{"enter":true,"exit":true,"walking":true,"cycling":true,"driving":true,"stationary":false,"trip":true}';
+alter table public.messages drop constraint if exists messages_type_check;
+alter table public.messages add constraint messages_type_check check(type in ('text','love','event'));
+alter table public.messages add column if not exists metadata jsonb not null default '{}';
+alter table public.stories add column if not exists media_type text not null default 'image' check(media_type in ('image','video'));
+alter table public.stories add column if not exists caption text not null default '' check(char_length(caption)<=1000);
+alter table public.locations add column if not exists battery_level integer check(battery_level between 0 and 100);
+alter table public.locations add column if not exists charging boolean;
+alter table public.locations add column if not exists activity text check(activity in ('unknown','stationary','walking','cycling','driving'));
+alter table public.locations add column if not exists activity_confidence text check(activity_confidence in ('low','medium','high'));
+alter table public.geofence_events drop constraint if exists geofence_events_event_type_check;
+alter table public.geofence_events add constraint geofence_events_event_type_check check(event_type in ('enter','exit'));
+
+create or replace function public.save_behavior_options(p_location jsonb default '{}',p_events jsonb default '{}')
+returns public.user_settings language plpgsql security definer set search_path=public as $$
+declare s public.user_settings; k text; o jsonb; e jsonb;
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  if jsonb_typeof(p_location)<>'object' or jsonb_typeof(p_events)<>'object' or p_location is null or p_events is null then raise exception 'Opciones no válidas'; end if;
+  insert into public.user_settings(user_id) values(auth.uid()) on conflict do nothing;
+  select * into s from public.user_settings where user_id=auth.uid() for update;
+  for k in select jsonb_object_keys(p_location) loop
+    if not s.location_options ? k then raise exception 'Opción desconocida: %',k; end if;
+    if jsonb_typeof(p_location->k) is distinct from jsonb_typeof(s.location_options->k) then raise exception 'Tipo incorrecto: %',k; end if;
+  end loop;
+  for k in select jsonb_object_keys(p_events) loop
+    if not s.event_options ? k or jsonb_typeof(p_events->k)<>'boolean' then raise exception 'Aviso no válido: %',k; end if;
+  end loop;
+  o:=s.location_options||p_location; e:=s.event_options||p_events;
+  if not (o->>'normal_distance')::numeric between 25 and 1000
+    or not (o->>'normal_interval')::numeric between 30 and 900
+    or not (o->>'live_interval')::numeric between 5 and 60
+    or not (o->>'battery_threshold')::numeric between 5 and 50
+    or o->>'low_battery_mode' not in ('balanced','off','live') then raise exception 'Opciones fuera de rango'; end if;
+  update public.user_settings set location_options=o,event_options=e,updated_at=now() where user_id=auth.uid() returning * into s;
+  if not (o->>'share_battery')::boolean then update public.locations set battery_level=null,charging=null where user_id=auth.uid(); end if;
+  if not (o->>'share_activity')::boolean then update public.locations set activity=null,activity_confidence=null where user_id=auth.uid(); end if;
+  return s;
+end $$;
+
+create or replace function public.notification_allowed(p_user_id uuid,p_kind text)
+returns boolean language sql stable security definer set search_path=public as $$
+  select coalesce((select notifications_enabled and case p_kind
+    when 'chat' then chat_enabled when 'love' then love_enabled
+    when 'geofence' then geofence_enabled and (event_options->>'enter')::boolean
+    when 'exit' then geofence_enabled and (event_options->>'exit')::boolean
+    when 'walking' then (event_options->>'walking')::boolean
+    when 'cycling' then (event_options->>'cycling')::boolean
+    when 'driving' then (event_options->>'driving')::boolean
+    when 'stationary' then (event_options->>'stationary')::boolean
+    when 'trip' then (event_options->>'trip')::boolean
+    when 'status' then stories_enabled when 'live' then geofence_enabled
+    when 'stories' then stories_enabled when 'dates' then dates_enabled else false end
+    from public.user_settings where user_id=p_user_id),false);
+$$;
+
+create or replace function public.queue_message_notification()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if new.type='event' then return new; end if;
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data)
+    select user_id,new.couple_id,'message:'||new.id,case when new.type='love' then 'Tu pareja te ha enviado amor' else 'Nuevo mensaje' end,
+      case when new.type='love' then 'Un gesto para vuestro día 💜' else left(new.text,180) end,
+      case when new.type='love' then 'love' else 'chat' end,jsonb_build_object('screen','Chat','messageId',new.id)
+      from public.couple_members where couple_id=new.couple_id and user_id<>new.sender_id;
+  return new;
+end $$;
+
+create or replace function public.send_love_v2(p_couple_id uuid,p_client_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare d date:=(now() at time zone 'Europe/Madrid')::date; member public.couple_members; event_id uuid;
+begin
+  select * into member from public.couple_members where couple_id=p_couple_id and user_id=auth.uid() for update;
+  if member.user_id is null or not public.is_complete_couple(p_couple_id) or p_client_id is null then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if exists(select 1 from public.messages where sender_id=auth.uid() and client_id=p_client_id) then
+    return jsonb_build_object('sentNow',false,'sentToday',member.last_love_date=d,'streakCount',member.love_streak_count);
+  end if;
+  insert into public.love_events(couple_id,user_id,sent_on) values(p_couple_id,auth.uid(),d)
+    on conflict(couple_id,user_id,sent_on) do nothing returning id into event_id;
+  if event_id is not null then
+    member.love_streak_count:=case when member.last_love_date=d-1 then member.love_streak_count+1 else 1 end;
+    update public.couple_members set love_streak_count=member.love_streak_count,last_love_date=d
+      where couple_id=p_couple_id and user_id=auth.uid();
+  end if;
+  insert into public.messages(couple_id,sender_id,type,text,client_id)
+    values(p_couple_id,auth.uid(),'love','💜',p_client_id);
+  return jsonb_build_object('sentNow',true,'sentToday',true,'streakCount',member.love_streak_count);
+end $$;
+create or replace function public.send_love(p_couple_id uuid)
+returns jsonb language sql security definer set search_path=public as $$
+  select public.send_love_v2(p_couple_id,extensions.gen_random_uuid());
+$$;
+
+create or replace function public.record_geofence_transition(p_geofence_id uuid,p_event_id uuid,p_recorded_at timestamptz,p_transition text)
+returns uuid language plpgsql security definer set search_path=public as $$
+declare g public.geofences; previous public.geofence_events;
+begin
+  select * into g from public.geofences where id=p_geofence_id and user_id=auth.uid();
+  if g.id is null or not public.is_complete_couple(g.couple_id) then raise exception 'Lugar no autorizado' using errcode='42501'; end if;
+  if p_transition is null or p_transition not in ('enter','exit') or p_event_id is null or p_recorded_at is null or p_recorded_at<now()-interval '30 minutes' or p_recorded_at>now()+interval '1 minute' then raise exception 'Evento no válido' using errcode='22023'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(g.id::text,3));
+  select * into previous from public.geofence_events where user_id=auth.uid() and id=p_event_id;
+  if previous.id is not null then return previous.id; end if;
+  select * into previous from public.geofence_events where user_id=auth.uid() and geofence_id=g.id order by created_at desc limit 1;
+  if previous.created_at>=p_recorded_at or (previous.event_type=p_transition and previous.created_at>p_recorded_at-interval '15 minutes') then return previous.id; end if;
+  insert into public.geofence_events(id,couple_id,user_id,geofence_id,event_type,created_at)
+    values(p_event_id,g.couple_id,auth.uid(),g.id,p_transition,p_recorded_at);
+  return p_event_id;
+end $$;
+create or replace function public.queue_geofence_notification()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare place_name text; body_text text;
+begin
+  select name into place_name from public.geofences where id=new.geofence_id;
+  body_text:=(case when new.event_type='enter' then 'Ha llegado a ' else 'Ha salido de ' end)||coalesce(place_name,'un lugar guardado');
+  insert into public.messages(couple_id,sender_id,type,text,metadata,created_at)
+    values(new.couple_id,new.user_id,'event',body_text,jsonb_build_object('kind',new.event_type,'placeId',new.geofence_id),new.created_at);
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+    select user_id,new.couple_id,'place-transition:'||new.id,'Aviso de lugar',body_text,
+      case when new.event_type='enter' then 'geofence' else 'exit' end,jsonb_build_object('screen','Chat'),now()+interval '30 minutes'
+      from public.couple_members where couple_id=new.couple_id and user_id<>new.user_id;
+  return new;
+end $$;
+
+create or replace function public.create_story_v2(p_image_path text,p_media_type text,p_caption text)
+returns uuid language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); story_id uuid;
+begin
+  if c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if p_caption is null or char_length(p_caption)>1000 or p_media_type is null or p_media_type not in ('image','video')
+    or p_image_path is null or split_part(p_image_path,'/',1)<>c::text or split_part(p_image_path,'/',2)<>auth.uid()::text
+    or (p_media_type='image' and p_image_path !~ '^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9]{13}\.(jpg|png|webp|heic|heif)$')
+    or (p_media_type='video' and p_image_path !~ '^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9]{13}\.(mp4|mov)$') then raise exception 'Historia no válida' using errcode='22023'; end if;
+  if not exists(select 1 from storage.objects where bucket_id='stories' and name=p_image_path) then raise exception 'Archivo no disponible' using errcode='P0002'; end if;
+  insert into public.stories(couple_id,author_id,image_path,media_type,caption)
+    values(c,auth.uid(),p_image_path,p_media_type,trim(p_caption)) returning id into story_id;
+  return story_id;
+end $$;
+create or replace function public.queue_story_notification()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare description text;
+begin
+  description:=case when new.media_type='video' then 'Ha compartido un vídeo' else 'Ha compartido una foto' end;
+  insert into public.messages(couple_id,sender_id,type,text,metadata)
+    values(new.couple_id,new.author_id,'event',description||case when new.caption<>'' then ': '||new.caption else '' end,
+      jsonb_build_object('kind','story','storyId',new.id,'mediaType',new.media_type));
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+    select user_id,new.couple_id,'story:'||new.id,'Nueva historia',description,'stories',
+      jsonb_build_object('screen','Historias','storyId',new.id),new.expires_at
+      from public.couple_members where couple_id=new.couple_id and user_id<>new.author_id;
+  return new;
+end $$;
+update storage.buckets set file_size_limit=52428800,
+  allowed_mime_types=array['image/jpeg','image/png','image/webp','image/heic','image/heif','video/mp4','video/quicktime'] where id='stories';
+alter policy story_files_insert_member on storage.objects with check (
+  bucket_id='stories' and public.is_complete_couple(public.try_uuid((storage.foldername(name))[1]))
+  and public.try_uuid((storage.foldername(name))[2])=auth.uid()
+  and name ~ '^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9]{13}\.(jpg|png|webp|heic|heif|mp4|mov)$'
+);
+
+-- Keep the original validated location RPC private, then enrich the same fix.
+do $$ begin
+  -- Never copy the enriched wrapper over its own implementation on a retry.
+  if to_regprocedure('public.publish_location_fix(jsonb)') is null then
+    execute replace(pg_get_functiondef('public.publish_location_sample(jsonb)'::regprocedure),
+      'public.publish_location_sample(', 'public.publish_location_fix(');
+  end if;
+end $$;
+revoke all on function public.publish_location_fix(jsonb) from public,anon,authenticated;
+create or replace function public.publish_location_sample(p_sample jsonb)
+returns boolean language plpgsql security definer set search_path=public as $$
+declare accepted boolean; options jsonb;
+begin
+  accepted:=public.publish_location_fix(p_sample);
+  if not accepted then return false; end if;
+  select location_options into options from public.user_settings where user_id=auth.uid();
+  update public.locations set
+    battery_level=case when (options->>'share_battery')::boolean and (p_sample->>'battery_level')::numeric between 0 and 100 then (p_sample->>'battery_level')::integer end,
+    charging=case when (options->>'share_battery')::boolean then (p_sample->>'charging')::boolean end,
+    activity=case when (options->>'share_activity')::boolean and p_sample->>'activity' in ('unknown','stationary','walking','cycling','driving') then p_sample->>'activity' end,
+    activity_confidence=case when (options->>'share_activity')::boolean and p_sample->>'activity_confidence' in ('low','medium','high') then p_sample->>'activity_confidence' end
+    where user_id=auth.uid();
+  return true;
+end $$;
+
+revoke all on function public.save_behavior_options(jsonb,jsonb) from public;
+revoke all on function public.send_love_v2(uuid,uuid) from public;
+revoke all on function public.record_geofence_transition(uuid,uuid,timestamptz,text) from public;
+revoke all on function public.create_story_v2(text,text,text) from public;
+grant execute on function public.save_behavior_options(jsonb,jsonb) to authenticated;
+grant execute on function public.send_love_v2(uuid,uuid) to authenticated;
+grant execute on function public.record_geofence_transition(uuid,uuid,timestamptz,text) to authenticated;
+grant execute on function public.create_story_v2(text,text,text) to authenticated;
+
+create table if not exists public.trips (
+  id uuid primary key default extensions.gen_random_uuid(),
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  started_at timestamptz not null,
+  last_sample_at timestamptz not null,
+  last_moved_at timestamptz not null,
+  ended_at timestamptz,
+  end_reason text,
+  distance_m double precision not null default 0,
+  points jsonb not null default '[]',
+  activity text
+);
+create unique index if not exists one_open_trip_per_user on public.trips(user_id) where ended_at is null;
+alter table public.trips enable row level security;
+revoke all on public.trips from anon,authenticated;
+grant select on public.trips to authenticated;
+drop policy if exists trips_read on public.trips;
+create policy trips_read on public.trips for select to authenticated
+  using(couple_id=public.current_couple_id() and public.is_complete_couple(couple_id));
+create table if not exists public.activity_states (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  candidate text,
+  candidate_since timestamptz,
+  confirmed text,
+  last_notice_at timestamptz
+);
+alter table public.activity_states enable row level security;
+revoke all on public.activity_states from anon,authenticated;
+
+create or replace function public.finish_trip(p_user_id uuid,p_reason text,p_time timestamptz)
+returns void language plpgsql security definer set search_path=public as $$
+declare trip public.trips; description text;
+begin
+  update public.trips set ended_at=greatest(started_at,p_time),end_reason=p_reason
+    where user_id=p_user_id and ended_at is null returning * into trip;
+  if trip.id is null then return; end if;
+  if trip.distance_m<50 or jsonb_array_length(trip.points)<2 then delete from public.trips where id=trip.id; return; end if;
+  description:=case when p_reason='paused' then 'Recorrido interrumpido' else 'Recorrido finalizado' end||' · '||round(trip.distance_m)::text||' m';
+  insert into public.messages(couple_id,sender_id,type,text,metadata)
+    values(trip.couple_id,p_user_id,'event',description,jsonb_build_object('kind','trip','tripId',trip.id));
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data)
+    select user_id,trip.couple_id,'trip:'||trip.id,'Recorrido compartido',description,'trip',jsonb_build_object('screen','Chat','tripId',trip.id)
+      from public.couple_members where couple_id=trip.couple_id and user_id<>p_user_id;
+end $$;
+
+create or replace function public.process_location_activity()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare options jsonb; trip public.trips; state public.activity_states; p jsonb; meters double precision; description text;
+begin
+  if not new.sharing or new.accuracy_m is null or new.accuracy_m>100 then return new; end if;
+  select location_options into options from public.user_settings where user_id=new.user_id;
+  if (options->>'share_activity')::boolean and new.activity in ('stationary','walking','cycling','driving')
+    and new.activity_confidence in ('medium','high') then
+    insert into public.activity_states(user_id,couple_id,candidate,candidate_since)
+      values(new.user_id,new.couple_id,new.activity,new.captured_at) on conflict(user_id) do nothing;
+    select * into state from public.activity_states where user_id=new.user_id for update;
+    if state.couple_id<>new.couple_id or state.candidate is distinct from new.activity then
+      update public.activity_states set couple_id=new.couple_id,candidate=new.activity,candidate_since=new.captured_at where user_id=new.user_id;
+    elsif new.captured_at-state.candidate_since>=interval '30 seconds' and state.confirmed is distinct from new.activity
+      and (state.last_notice_at is null or new.captured_at-state.last_notice_at>=interval '2 minutes') then
+      update public.activity_states set confirmed=new.activity,last_notice_at=new.captured_at where user_id=new.user_id;
+      description:=case new.activity when 'walking' then 'Está caminando' when 'cycling' then 'Va en bicicleta' when 'driving' then 'Se desplaza en vehículo' else 'Ha dejado de moverse' end;
+      insert into public.messages(couple_id,sender_id,type,text,metadata)
+        values(new.couple_id,new.user_id,'event',description,jsonb_build_object('kind','activity','activity',new.activity));
+      insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data)
+        select user_id,new.couple_id,'activity:'||extensions.gen_random_uuid(),'Actividad de tu pareja',description,new.activity,jsonb_build_object('screen','Chat')
+          from public.couple_members where couple_id=new.couple_id and user_id<>new.user_id;
+    end if;
+  end if;
+  if not (options->>'save_trips')::boolean then return new; end if;
+  select * into trip from public.trips where user_id=new.user_id and ended_at is null for update;
+  if trip.id is not null and trip.couple_id<>new.couple_id then delete from public.trips where id=trip.id; trip.id:=null; end if;
+  if trip.id is not null and trip.last_sample_at>=new.captured_at then return new; end if;
+  if trip.id is null then
+    if coalesce(new.speed_mps,0)<0.8 then return new; end if;
+    insert into public.trips(couple_id,user_id,started_at,last_sample_at,last_moved_at,points,activity)
+      values(new.couple_id,new.user_id,new.captured_at,new.captured_at,new.captured_at,
+        jsonb_build_array(jsonb_build_object('lat',new.lat,'lng',new.lng,'at',new.captured_at)),new.activity);
+    return new;
+  end if;
+  p:=trip.points->(jsonb_array_length(trip.points)-1);
+  meters:=6371000*2*asin(least(1,sqrt(power(sin(radians(new.lat-(p->>'lat')::double precision)/2),2)+
+    cos(radians(new.lat))*cos(radians((p->>'lat')::double precision))*power(sin(radians(new.lng-(p->>'lng')::double precision)/2),2))));
+  if meters>=greatest(25,new.accuracy_m) and new.captured_at-trip.last_sample_at>=interval '5 seconds' then
+    if jsonb_array_length(trip.points)>=2000 then
+      select jsonb_agg(point order by ord) into trip.points from jsonb_array_elements(trip.points) with ordinality as t(point,ord)
+        where ord%2=1 or ord=jsonb_array_length(trip.points);
+    end if;
+    update public.trips set points=trip.points||jsonb_build_array(jsonb_build_object('lat',new.lat,'lng',new.lng,'at',new.captured_at)),
+      distance_m=distance_m+meters,last_moved_at=new.captured_at,last_sample_at=new.captured_at where id=trip.id;
+  else
+    update public.trips set last_sample_at=new.captured_at where id=trip.id;
+    if coalesce(new.speed_mps,0)<0.8 and new.captured_at-trip.last_moved_at>=interval '3 minutes' then
+      perform public.finish_trip(new.user_id,'stationary',new.captured_at);
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists process_location_activity on public.locations;
+create trigger process_location_activity after update of battery_level,charging,activity,activity_confidence on public.locations
+  for each row execute function public.process_location_activity();
+
+create or replace function public.close_trip_on_arrival()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if new.event_type='enter' then perform public.finish_trip(new.user_id,'arrival',new.created_at); end if;
+  return new;
+end $$;
+drop trigger if exists close_trip_on_arrival on public.geofence_events;
+create trigger close_trip_on_arrival after insert on public.geofence_events for each row execute function public.close_trip_on_arrival();
+create or replace function public.close_trip_on_pause()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if new.location_mode='off' or not (new.location_options->>'save_trips')::boolean then
+    perform public.finish_trip(new.user_id,'paused',now());
+  end if;
+  return new;
+end $$;
+drop trigger if exists close_trip_on_pause on public.user_settings;
+create trigger close_trip_on_pause after update on public.user_settings for each row execute function public.close_trip_on_pause();
+
+revoke all on function public.finish_trip(uuid,text,timestamptz) from public,anon,authenticated;
+revoke all on function public.process_location_activity() from public;
+revoke all on function public.close_trip_on_arrival() from public;
+revoke all on function public.close_trip_on_pause() from public;
+
+create or replace function public.get_tracking_config(p_device_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare s public.user_settings; deadline timestamptz;
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  select * into s from public.user_settings where user_id=auth.uid();
+  if s.user_id is null or s.tracking_device_id is distinct from p_device_id
+    or not exists(select 1 from public.devices where id=p_device_id and user_id=auth.uid()) then return null; end if;
+  if s.location_mode='balanced' and s.auto_live_enabled then
+    select max(expires_at) into deadline from public.map_view_sessions where target_id=auth.uid()
+      and couple_id=public.current_couple_id() and public.is_complete_couple(couple_id) and expires_at>now();
+  end if;
+  return to_jsonb(s)||jsonb_build_object('userId',auth.uid(),'auto_live_until',deadline,
+    'trip_active',exists(select 1 from public.trips where user_id=auth.uid() and ended_at is null));
+end $$;
+
+-- Preserve existing place monitoring; add a revocation control, not a new grant.
+alter table public.user_settings add column if not exists geofence_paused boolean not null default false;
+alter table public.user_settings add column if not exists geofence_resume_after timestamptz not null default 'epoch';
+
+drop function if exists public.set_place_sharing(boolean,boolean);
+create or replace function public.set_place_sharing(p_enabled boolean, p_pause_location boolean default false, p_expected_user_id uuid default auth.uid())
+returns public.user_settings language plpgsql security definer set search_path=public as $$
+declare result public.user_settings;
+begin
+  if auth.uid() is null or auth.uid() is distinct from p_expected_user_id then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  if p_enabled is null or p_pause_location is null or (p_enabled and p_pause_location) then
+    raise exception 'Preferencias incompatibles' using errcode='22023';
+  end if;
+  insert into public.user_settings(user_id) values(auth.uid()) on conflict do nothing;
+  select * into result from public.user_settings where user_id=auth.uid() for update;
+  update public.user_settings set geofence_paused=not p_enabled,
+    geofence_resume_after=case when p_enabled and result.geofence_paused then clock_timestamp() else geofence_resume_after end,
+    updated_at=now() where user_id=auth.uid() returning * into result;
+  if p_pause_location then
+    result:=public.save_settings('{"location_mode":"off"}'::jsonb,null);
+  end if;
+  return result;
+end $$;
+revoke all on function public.set_place_sharing(boolean,boolean,uuid) from public;
+revoke all on function public.set_place_sharing(boolean,boolean,uuid) from anon;
+grant execute on function public.set_place_sharing(boolean,boolean,uuid) to authenticated;
+
+-- Applies to both old and new arrival RPCs. Lock the same row as the pause
+-- transaction so an event either precedes the pause or is rejected after it.
+create or replace function public.enforce_place_sharing()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare preference public.user_settings;
+begin
+  insert into public.user_settings(user_id) values(new.user_id) on conflict do nothing;
+  select * into preference from public.user_settings where user_id=new.user_id for share;
+  if preference.user_id is null or preference.geofence_paused or new.created_at<preference.geofence_resume_after then
+    raise exception 'Avisos de lugares pausados o evento anterior a la autorización' using errcode='42501';
+  end if;
+  return new;
+end $$;
+revoke all on function public.enforce_place_sharing() from public,anon,authenticated;
+drop trigger if exists enforce_place_sharing on public.geofence_events;
+create trigger enforce_place_sharing before insert on public.geofence_events
+for each row execute function public.enforce_place_sharing();
+
+alter table public.user_settings add column if not exists shared_precision text not null default 'precise'
+  check (shared_precision in ('precise','approximate'));
+alter table public.user_settings add column if not exists approximate_place_events boolean not null default false;
+alter table public.location_history add column if not exists approximate boolean not null default false;
+alter table public.location_history add column if not exists accuracy_m double precision;
+
+create or replace function public.uses_approximate_sharing(p_user_id uuid)
+returns boolean language sql stable security definer set search_path=public as $$
+  select exists(select 1 from public.user_settings where user_id=p_user_id and shared_precision='approximate');
+$$;
+revoke all on function public.uses_approximate_sharing(uuid) from public;
+grant execute on function public.uses_approximate_sharing(uuid) to authenticated;
+
+-- Round before any public row, Realtime publication or trip trigger sees it.
+create or replace function public.reduce_shared_location()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if new.sharing and public.uses_approximate_sharing(new.user_id) then
+    new.lat:=round(new.lat::numeric,2)::double precision;
+    new.lng:=round(new.lng::numeric,2)::double precision;
+    -- A 0.01 degree cell has a maximum centre-to-corner distance below 800 m.
+    -- Retain a conservative circle, including uncertainty of the original fix.
+    new.accuracy_m:=greatest(coalesce(new.accuracy_m,0)+800,2000);
+    new.speed_mps:=null;
+    new.heading:=null;
+  end if;
+  return new;
+end $$;
+revoke all on function public.reduce_shared_location() from public,anon,authenticated;
+drop trigger if exists reduce_shared_location on public.locations;
+create trigger reduce_shared_location before insert or update of lat,lng,accuracy_m on public.locations
+for each row execute function public.reduce_shared_location();
+
+-- Retain a useful history of zones, without retaining precise coordinates.
+create or replace function public.suppress_precise_history()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if public.uses_approximate_sharing(new.user_id) then
+    if tg_table_name='geofence_events' then
+      if not exists(select 1 from public.user_settings where user_id=new.user_id and approximate_place_events) then return null; end if;
+    else
+      new.lat:=round(new.lat::numeric,2)::double precision;
+      new.lng:=round(new.lng::numeric,2)::double precision;
+      new.approximate:=true;
+      select greatest(accuracy_m,2000) into new.accuracy_m from public.locations where user_id=new.user_id;
+      new.accuracy_m:=coalesce(new.accuracy_m,2000);
+    end if;
+  end if;
+  return new;
+end $$;
+revoke all on function public.suppress_precise_history() from public,anon,authenticated;
+drop trigger if exists suppress_precise_history on public.location_history;
+create trigger suppress_precise_history before insert on public.location_history
+for each row execute function public.suppress_precise_history();
+drop trigger if exists suppress_precise_place_events on public.geofence_events;
+create trigger suppress_precise_place_events before insert on public.geofence_events
+for each row execute function public.suppress_precise_history();
+
+drop policy if exists history_precision on public.location_history;
+create policy history_precision on public.location_history as restrictive for select to authenticated
+  using(user_id=auth.uid() or approximate or not public.uses_approximate_sharing(user_id));
+drop policy if exists trip_precision on public.trips;
+create policy trip_precision on public.trips as restrictive for select to authenticated
+  using(user_id=auth.uid() or not public.uses_approximate_sharing(user_id));
+
+create or replace function public.set_shared_precision(p_precision text)
+returns public.user_settings language plpgsql security definer set search_path=public as $$
+declare result public.user_settings;
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  if p_precision is null or p_precision not in ('precise','approximate') then
+    raise exception 'Precisión no válida' using errcode='22023';
+  end if;
+  insert into public.user_settings(user_id) values(auth.uid()) on conflict do nothing;
+  select * into result from public.user_settings where user_id=auth.uid() for update;
+  update public.user_settings set shared_precision=p_precision,updated_at=now()
+    where user_id=auth.uid() returning * into result;
+  if p_precision='approximate' then
+    -- End an in-progress route without publishing its distance or point list.
+    update public.trips set ended_at=last_sample_at,end_reason='privacy'
+      where user_id=auth.uid() and ended_at is null;
+    update public.locations set lat=lat where user_id=auth.uid();
+  end if;
+  return result;
+end $$;
+revoke all on function public.set_shared_precision(text) from public;
+grant execute on function public.set_shared_precision(text) to authenticated;
+
+create or replace function public.set_approximate_place_events(p_enabled boolean)
+returns public.user_settings language plpgsql security definer set search_path=public as $$
+declare result public.user_settings;
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  if p_enabled is null then raise exception 'Preferencia no válida' using errcode='22023'; end if;
+  insert into public.user_settings(user_id) values(auth.uid()) on conflict do nothing;
+  update public.user_settings set approximate_place_events=p_enabled,updated_at=now()
+    where user_id=auth.uid() returning * into result;
+  return result;
+end $$;
+revoke all on function public.set_approximate_place_events(boolean) from public;
+grant execute on function public.set_approximate_place_events(boolean) to authenticated;
+
+create table if not exists public.media_assets (
+  id uuid primary key,
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  purpose text not null check(purpose in ('memory','chat')),
+  kind text not null check(kind in ('image','video','audio')),
+  bucket_id text not null check(bucket_id in ('memories','chat-media')),
+  object_path text not null unique,
+  mime_type text not null,
+  byte_size bigint not null check(byte_size>0 and byte_size<=52428800),
+  state text not null default 'uploading' check(state in ('uploading','ready')),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now()+interval '24 hours',
+  published_at timestamptz
+);
+create index if not exists media_couple on public.media_assets(couple_id);
+alter table public.media_assets enable row level security;
+revoke all on public.media_assets from anon,authenticated;
+grant select on public.media_assets to authenticated;
+drop policy if exists media_read on public.media_assets;
+create policy media_read on public.media_assets for select to authenticated using(
+  couple_id=public.current_couple_id() and public.is_complete_couple(couple_id)
+  and (author_id=auth.uid() or (state='ready' and published_at is not null))
+);
+
+create table if not exists public.media_deletions (
+  id bigint generated always as identity primary key,
+  bucket_id text not null,
+  object_path text not null,
+  author_id uuid not null,
+  created_at timestamptz not null default now(),
+  unique(bucket_id,object_path)
+);
+alter table public.media_deletions enable row level security;
+revoke all on public.media_deletions from public,anon,authenticated;
+create or replace function public.queue_media_deletion()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  insert into public.media_deletions(bucket_id,object_path,author_id) values(old.bucket_id,old.object_path,old.author_id) on conflict do nothing;
+  return old;
+end $$;
+revoke all on function public.queue_media_deletion() from public,anon,authenticated;
+drop trigger if exists queue_media_deletion on public.media_assets;
+create trigger queue_media_deletion before delete on public.media_assets for each row execute function public.queue_media_deletion();
+
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values ('memories','memories',false,52428800,array['image/jpeg','image/png','image/webp','video/mp4','video/quicktime']),
+       ('chat-media','chat-media',false,52428800,array['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','audio/mp4','audio/mpeg','audio/aac'])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+drop policy if exists media_files_upload on storage.objects;
+create policy media_files_upload on storage.objects for insert to authenticated with check (
+  exists(select 1 from public.media_assets a where a.bucket_id=storage.objects.bucket_id and a.object_path=storage.objects.name
+    and a.author_id=auth.uid() and a.state='uploading' and a.expires_at>now())
+);
+drop policy if exists media_files_read on storage.objects;
+create policy media_files_read on storage.objects for select to authenticated using (
+  exists(select 1 from public.media_assets a where a.bucket_id=storage.objects.bucket_id and a.object_path=storage.objects.name
+    and (a.author_id=auth.uid() or (a.state='ready' and a.published_at is not null)))
+);
+
+create or replace function public.reserve_media_upload(p_id uuid,p_purpose text,p_kind text,p_mime text,p_bytes bigint)
+returns public.media_assets language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); result public.media_assets; bucket text;
+begin
+  if auth.uid() is null or c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if p_id is null or p_purpose is null or p_purpose not in ('memory','chat') or p_kind is null or p_kind not in ('image','video','audio')
+    or p_mime is null or p_bytes is null or p_bytes<=0 or p_bytes>52428800
+    or (p_kind='image' and (p_mime not in ('image/jpeg','image/png','image/webp') or p_bytes>10485760))
+    or (p_kind='video' and p_mime not in ('video/mp4','video/quicktime'))
+    or (p_kind='audio' and (p_purpose<>'chat' or p_mime not in ('audio/mp4','audio/mpeg','audio/aac') or p_bytes>10485760)) then
+    raise exception 'Archivo no válido o demasiado grande' using errcode='22023';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(c::text,17));
+  select * into result from public.media_assets where id=p_id;
+  if result.id is not null then
+    if result.author_id<>auth.uid() or result.couple_id<>c or result.purpose<>p_purpose or result.kind<>p_kind or result.mime_type<>p_mime or result.byte_size<>p_bytes then
+      raise exception 'Identificador de carga ya utilizado' using errcode='22023';
+    end if;
+    return result;
+  end if;
+  if coalesce((select sum(byte_size) from public.media_assets where couple_id=c),0)+p_bytes>524288000 then
+    raise exception 'Se ha alcanzado el límite compartido de 500 MiB' using errcode='22023';
+  end if;
+  bucket:=case when p_purpose='memory' then 'memories' else 'chat-media' end;
+  if exists(select 1 from public.media_deletions where bucket_id=bucket and object_path=c::text||'/'||auth.uid()::text||'/'||p_id::text) then
+    raise exception 'Esta carga fue cancelada; usa un identificador nuevo' using errcode='22023';
+  end if;
+  insert into public.media_assets(id,couple_id,author_id,purpose,kind,bucket_id,object_path,mime_type,byte_size)
+    values(p_id,c,auth.uid(),p_purpose,p_kind,bucket,c::text||'/'||auth.uid()::text||'/'||p_id::text,p_mime,p_bytes)
+    returning * into result;
+  return result;
+end $$;
+revoke all on function public.reserve_media_upload(uuid,text,text,text,bigint) from public;
+grant execute on function public.reserve_media_upload(uuid,text,text,text,bigint) to authenticated;
+
+create or replace function public.complete_media_upload(p_id uuid)
+returns public.media_assets language plpgsql security definer set search_path=public as $$
+declare result public.media_assets; info jsonb;
+begin
+  select * into result from public.media_assets where id=p_id and author_id=auth.uid() and couple_id=public.current_couple_id() for update;
+  if result.id is null or not public.is_complete_couple(result.couple_id) then raise exception 'Carga no disponible' using errcode='42501'; end if;
+  if result.state='ready' then return result; end if;
+  if result.expires_at<=now() then raise exception 'La carga ha caducado' using errcode='22023'; end if;
+  select metadata into info from storage.objects where bucket_id=result.bucket_id and name=result.object_path;
+  if info is null or (info->>'size')::bigint is distinct from result.byte_size or info->>'mimetype' is distinct from result.mime_type then
+    raise exception 'El archivo almacenado no coincide con la carga' using errcode='22023';
+  end if;
+  update public.media_assets set state='ready' where id=p_id returning * into result;
+  return result;
+end $$;
+revoke all on function public.complete_media_upload(uuid) from public;
+grant execute on function public.complete_media_upload(uuid) to authenticated;
+
+create or replace function public.cancel_media_upload(p_id uuid)
+returns void language plpgsql security definer set search_path=public as $$
+begin
+  delete from public.media_assets where id=p_id and author_id=auth.uid() and published_at is null;
+end $$;
+revoke all on function public.cancel_media_upload(uuid) from public;
+grant execute on function public.cancel_media_upload(uuid) to authenticated;
+
+create table if not exists public.daily_checkins (
+  id uuid primary key default extensions.gen_random_uuid(),
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  local_day date not null,
+  mood text not null check(mood in ('happy','calm','tired','sad','stressed','excited')),
+  energy integer not null check(energy between 1 and 5),
+  phrase text not null default '' check(char_length(phrase)<=280),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  unique(couple_id,user_id,local_day)
+);
+create table if not exists public.checkin_responses (
+  checkin_id uuid not null references public.daily_checkins(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  text text not null check(char_length(text) between 1 and 280),
+  created_at timestamptz not null default now(),
+  primary key(checkin_id,user_id)
+);
+alter table public.daily_checkins enable row level security;
+alter table public.checkin_responses enable row level security;
+revoke all on public.daily_checkins,public.checkin_responses from anon,authenticated;
+grant select on public.daily_checkins,public.checkin_responses to authenticated;
+drop policy if exists checkins_read on public.daily_checkins;
+create policy checkins_read on public.daily_checkins for select to authenticated
+  using(couple_id=public.current_couple_id() and public.is_complete_couple(couple_id) and expires_at>now());
+drop policy if exists checkin_responses_read on public.checkin_responses;
+create policy checkin_responses_read on public.checkin_responses for select to authenticated
+  using(exists(select 1 from public.daily_checkins where id=checkin_id));
+
+create or replace function public.save_daily_checkin(p_mood text,p_energy integer,p_phrase text)
+returns public.daily_checkins language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); day date:=(now() at time zone 'Europe/Madrid')::date; result public.daily_checkins;
+begin
+  if auth.uid() is null or c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if p_mood is null or p_mood not in ('happy','calm','tired','sad','stressed','excited') or p_energy is null or p_energy not between 1 and 5
+    or p_phrase is null or char_length(p_phrase)>280 then raise exception 'Check-in no válido' using errcode='22023'; end if;
+  insert into public.daily_checkins(couple_id,user_id,local_day,mood,energy,phrase,expires_at)
+    values(c,auth.uid(),day,p_mood,p_energy,trim(p_phrase),(day+1)::timestamp at time zone 'Europe/Madrid')
+    on conflict(couple_id,user_id,local_day) do update set mood=excluded.mood,energy=excluded.energy,phrase=excluded.phrase,updated_at=now(),expires_at=excluded.expires_at
+    returning * into result;
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+    select user_id,c,'checkin:'||result.id,'¿Cómo está tu pareja?','Ha compartido cómo se siente hoy','status',jsonb_build_object('screen','Inicio'),result.expires_at
+    from public.couple_members where couple_id=c and user_id<>auth.uid()
+    on conflict do nothing;
+  return result;
+end $$;
+revoke all on function public.save_daily_checkin(text,integer,text) from public;
+grant execute on function public.save_daily_checkin(text,integer,text) to authenticated;
+
+create or replace function public.respond_daily_checkin(p_checkin_id uuid,p_text text)
+returns void language plpgsql security definer set search_path=public as $$
+declare item public.daily_checkins;
+begin
+  select * into item from public.daily_checkins where id=p_checkin_id and couple_id=public.current_couple_id() and expires_at>now();
+  if item.id is null or item.user_id=auth.uid() or not public.is_complete_couple(item.couple_id) then raise exception 'Check-in no disponible' using errcode='42501'; end if;
+  if p_text is null or char_length(trim(p_text)) not between 1 and 280 then raise exception 'Respuesta no válida' using errcode='22023'; end if;
+  insert into public.checkin_responses(checkin_id,user_id,text) values(item.id,auth.uid(),trim(p_text))
+    on conflict(checkin_id,user_id) do update set text=excluded.text;
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+    values(item.user_id,item.couple_id,'checkin-response:'||item.id||':'||auth.uid(),'Un gesto de apoyo','Tu pareja ha respondido a tu check-in','status',jsonb_build_object('screen','Inicio'),item.expires_at)
+    on conflict do nothing;
+end $$;
+revoke all on function public.respond_daily_checkin(uuid,text) from public;
+grant execute on function public.respond_daily_checkin(uuid,text) to authenticated;
+
+do $$ begin
+  if not exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='daily_checkins') then
+    alter publication supabase_realtime add table public.daily_checkins;
+  end if;
+  if not exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='checkin_responses') then
+    alter publication supabase_realtime add table public.checkin_responses;
+  end if;
+end $$;
+
+create or replace function public.send_affection(p_couple_id uuid,p_client_id uuid,p_kind text)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare d date:=(now() at time zone 'Europe/Madrid')::date; member public.couple_members; event_id uuid; previous public.messages; symbol text;
+begin
+  if p_kind is null or p_kind not in ('love','kiss','hug','miss_you') then raise exception 'Gesto no válido' using errcode='22023'; end if;
+  select * into member from public.couple_members where couple_id=p_couple_id and user_id=auth.uid() for update;
+  if member.user_id is null or not public.is_complete_couple(p_couple_id) or p_client_id is null then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  select * into previous from public.messages where sender_id=auth.uid() and client_id=p_client_id;
+  if previous.id is not null then
+    if previous.couple_id<>p_couple_id or previous.type<>'love' or coalesce(previous.metadata->>'affection','love')<>p_kind then
+      raise exception 'Identificador utilizado para otra acción' using errcode='22023';
+    end if;
+    return jsonb_build_object('sentNow',false,'sentToday',member.last_love_date=d,'streakCount',member.love_streak_count);
+  end if;
+  if (select count(*) from public.messages where sender_id=auth.uid() and type='love' and created_at>now()-interval '10 seconds')>=10 then
+    raise exception 'Espera unos segundos antes de enviar otro gesto' using errcode='22023';
+  end if;
+  insert into public.love_events(couple_id,user_id,sent_on) values(p_couple_id,auth.uid(),d)
+    on conflict(couple_id,user_id,sent_on) do nothing returning id into event_id;
+  if event_id is not null then
+    member.love_streak_count:=case when member.last_love_date=d-1 then member.love_streak_count+1 else 1 end;
+    update public.couple_members set love_streak_count=member.love_streak_count,last_love_date=d where couple_id=p_couple_id and user_id=auth.uid();
+  end if;
+  symbol:=case p_kind when 'love' then '❤️ Amor' when 'kiss' then '😘 Beso' when 'hug' then '🫂 Abrazo' else '✨ Te echo de menos' end;
+  insert into public.messages(couple_id,sender_id,type,text,client_id,metadata)
+    values(p_couple_id,auth.uid(),'love',symbol,p_client_id,jsonb_build_object('affection',p_kind));
+  return jsonb_build_object('sentNow',true,'sentToday',true,'streakCount',member.love_streak_count);
+end $$;
+revoke all on function public.send_affection(uuid,uuid,text) from public;
+grant execute on function public.send_affection(uuid,uuid,text) to authenticated;
+
+create or replace function public.queue_message_notification()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if new.type='event' then return new; end if;
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data)
+    select user_id,new.couple_id,'message:'||new.id,case when new.type='love' then 'Un gesto de tu pareja' else 'Nuevo mensaje' end,
+      case when new.type='love' then case new.metadata->>'affection' when 'kiss' then 'Te ha enviado un beso 😘'
+        when 'hug' then 'Te ha enviado un abrazo 🫂' when 'miss_you' then 'Te echa de menos ✨' else 'Te ha enviado amor ❤️' end else left(new.text,180) end,
+      case when new.type='love' then 'love' else 'chat' end,jsonb_build_object('screen','Chat','messageId',new.id)
+      from public.couple_members where couple_id=new.couple_id and user_id<>new.sender_id;
+  return new;
+end $$;
+
+alter table public.profiles add column if not exists status_source text not null default 'legacy';
+alter table public.profiles add column if not exists status_expires_at timestamptz;
+alter table public.profiles drop constraint if exists profiles_status_text_check;
+alter table public.profiles add constraint profiles_status_text_check check(char_length(status_text)<=280);
+
+create or replace function public.project_checkin_status()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if tg_op='DELETE' then
+    update public.profiles set status_text='',status_emoji='',status_updated_at=null,status_expires_at=null,status_source='legacy'
+      where id=old.user_id and status_source='checkin' and status_updated_at=old.updated_at;
+    return old;
+  end if;
+  update public.profiles set status_text=new.phrase,
+    status_emoji=case new.mood when 'happy' then '😊' when 'calm' then '😌' when 'tired' then '😴'
+      when 'sad' then '😔' when 'stressed' then '😣' else '🤩' end,
+    status_updated_at=new.updated_at,status_expires_at=new.expires_at,status_source='checkin'
+    where id=new.user_id;
+  return new;
+end $$;
+revoke all on function public.project_checkin_status() from public,anon,authenticated;
+drop trigger if exists project_checkin_status on public.daily_checkins;
+create trigger project_checkin_status after insert or update or delete on public.daily_checkins
+for each row execute function public.project_checkin_status();
+
+create or replace function public.queue_status_notification()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare c uuid;
+begin
+  if new.status_source='checkin' or new.status_text='' or (new.status_text=old.status_text and new.status_emoji=old.status_emoji) then return new; end if;
+  select couple_id into c from public.couple_members where user_id=new.id;
+  if c is null then return new; end if;
+  insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data)
+    select user_id,c,'status:'||new.id||':'||new.status_updated_at,'Nuevo estado de tu pareja',new.status_text,'status',jsonb_build_object('screen','Estado')
+    from public.couple_members where couple_id=c and user_id<>new.id;
+  return new;
+end $$;
+create or replace function public.set_status(p_text text,p_emoji text)
+returns void language plpgsql security definer set search_path=public as $$
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  if p_text is null or p_emoji is null or char_length(p_text)>60 or char_length(p_emoji)>16 then raise exception 'Estado no válido' using errcode='22023'; end if;
+  update public.profiles set status_text=trim(p_text),status_emoji=trim(p_emoji),status_source='legacy',
+    status_updated_at=case when trim(p_text)='' and trim(p_emoji)='' then null else now() end,
+    status_expires_at=now()+interval '24 hours' where id=auth.uid();
+end $$;
+create or replace function public.clear_daily_checkin(p_checkin_id uuid)
+returns void language plpgsql security definer set search_path=public as $$
+begin
+  if auth.uid() is null then raise exception 'Sesión necesaria' using errcode='42501'; end if;
+  update public.daily_checkins set expires_at=least(expires_at,now())
+    where id=p_checkin_id and user_id=auth.uid() and couple_id=public.current_couple_id();
+end $$;
+revoke all on function public.clear_daily_checkin(uuid) from public;
+revoke all on function public.clear_daily_checkin(uuid) from anon;
+grant execute on function public.clear_daily_checkin(uuid) to authenticated;
+
+create table if not exists public.question_bank (
+  id uuid primary key default extensions.gen_random_uuid(),
+  category text not null check(category in ('fun','romantic','deep','custom','intimate')),
+  prompt text not null check(char_length(prompt) between 1 and 500),
+  couple_id uuid references public.couples(id) on delete cascade,
+  active boolean not null default true
+);
+create table if not exists public.couple_daily_questions (
+  id uuid primary key default extensions.gen_random_uuid(),
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  local_day date not null,
+  question_id uuid references public.question_bank(id) on delete set null,
+  prompt text not null,
+  category text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  closes_at timestamptz not null,
+  revealed_at timestamptz,
+  unique(couple_id,local_day)
+);
+create table if not exists public.question_answers (
+  question_id uuid not null references public.couple_daily_questions(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  answer text not null check(char_length(answer) between 1 and 2000),
+  version integer not null default 1,
+  updated_at timestamptz not null default now(),
+  primary key(question_id,user_id)
+);
+alter table public.question_bank enable row level security;
+create table if not exists public.question_skips (
+  question_id uuid not null references public.couple_daily_questions(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  primary key(question_id,user_id)
+);
+alter table public.question_skips enable row level security;
+revoke all on public.question_skips from anon,authenticated;
+grant select on public.question_skips to authenticated;
+drop policy if exists question_skips_read on public.question_skips;
+create policy question_skips_read on public.question_skips for select to authenticated
+  using(user_id=auth.uid() and exists(select 1 from public.couple_daily_questions q where q.id=question_skips.question_id));
+alter table public.couple_daily_questions enable row level security;
+alter table public.question_answers enable row level security;
+revoke all on public.question_bank,public.couple_daily_questions,public.question_answers from anon,authenticated;
+grant select on public.couple_daily_questions,public.question_answers to authenticated;
+drop policy if exists daily_questions_read on public.couple_daily_questions;
+create policy daily_questions_read on public.couple_daily_questions for select to authenticated
+  using(couple_id=public.current_couple_id() and public.is_complete_couple(couple_id));
+drop policy if exists question_answers_read on public.question_answers;
+create policy question_answers_read on public.question_answers for select to authenticated
+  using(exists(select 1 from public.couple_daily_questions q where q.id=question_answers.question_id
+    and (question_answers.user_id=auth.uid() or q.revealed_at is not null)));
+
+insert into public.question_bank(id,category,prompt) values
+  ('a1150000-0000-4000-8000-000000000001','fun','Si pudiéramos inventar una tradición absurda para nosotros, ¿cuál sería?'),
+  ('a1150000-0000-4000-8000-000000000002','fun','¿Qué aventura pequeña te gustaría vivir conmigo este mes?'),
+  ('a1150000-0000-4000-8000-000000000003','romantic','¿Qué detalle cotidiano te hace sentir cerca de mí?'),
+  ('a1150000-0000-4000-8000-000000000004','romantic','¿Qué momento nuestro te gustaría volver a vivir?'),
+  ('a1150000-0000-4000-8000-000000000005','deep','¿En qué te gustaría sentir más apoyo esta semana?'),
+  ('a1150000-0000-4000-8000-000000000006','deep','¿Qué has aprendido sobre ti últimamente?')
+on conflict(id) do nothing;
+
+create or replace function public.get_daily_question(p_category text default 'fun')
+returns public.couple_daily_questions language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); day date:=(now() at time zone 'Europe/Madrid')::date;
+  result public.couple_daily_questions; chosen public.question_bank;
+begin
+  if auth.uid() is null or c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  perform 1 from public.couples where id=c for update;
+  select * into result from public.couple_daily_questions where couple_id=c and local_day=day;
+  if result.id is not null then return result; end if;
+  -- Intimate questions remain unavailable until mutual adult consent is implemented.
+  if p_category is null or p_category not in ('fun','romantic','deep') then raise exception 'Categoría no disponible' using errcode='22023'; end if;
+  select * into chosen from public.question_bank where active and category=p_category and couple_id is null
+    order by (select max(q.local_day) from public.couple_daily_questions q where q.couple_id=c and q.question_id=question_bank.id) asc nulls first,id limit 1;
+  if chosen.id is null then raise exception 'No hay preguntas en esta categoría' using errcode='22023'; end if;
+  insert into public.couple_daily_questions(couple_id,local_day,question_id,prompt,category,closes_at)
+    values(c,day,chosen.id,chosen.prompt,chosen.category,(day+1)::timestamp at time zone 'Europe/Madrid') returning * into result;
+  return result;
+end $$;
+revoke all on function public.get_daily_question(text) from public;
+grant execute on function public.get_daily_question(text) to authenticated;
+
+create or replace function public.answer_daily_question(p_question_id uuid,p_answer text,p_expected_version integer)
+returns void language plpgsql security definer set search_path=public as $$
+declare q public.couple_daily_questions; previous public.question_answers;
+begin
+  select * into q from public.couple_daily_questions where id=p_question_id and couple_id=public.current_couple_id() for update;
+  if auth.uid() is null or q.id is null or not public.is_complete_couple(q.couple_id) then raise exception 'Pregunta no disponible' using errcode='42501'; end if;
+  if p_answer is null or char_length(trim(p_answer)) not between 1 and 2000 or p_expected_version is null then raise exception 'Respuesta no válida' using errcode='22023'; end if;
+  select * into previous from public.question_answers where question_id=q.id and user_id=auth.uid();
+  if previous.answer=trim(p_answer) then return; end if;
+  if q.revealed_at is not null then raise exception 'Las respuestas ya están reveladas' using errcode='22023'; end if;
+  if q.closes_at<=now() then raise exception 'La pregunta ha terminado' using errcode='22023'; end if;
+  if exists(select 1 from public.question_skips where question_id=q.id and user_id=auth.uid()) then
+    raise exception 'Has pasado esta pregunta. Retómala antes de responder' using errcode='22023';
+  end if;
+  if coalesce(previous.version,0)<>p_expected_version then raise exception 'La respuesta cambió. Actualiza antes de editar' using errcode='40001'; end if;
+  insert into public.question_answers(question_id,user_id,answer) values(q.id,auth.uid(),trim(p_answer))
+    on conflict(question_id,user_id) do update set answer=excluded.answer,version=question_answers.version+1,updated_at=now();
+  update public.couple_daily_questions set updated_at=now() where id=q.id;
+  if (select count(*) from public.question_answers where question_id=q.id)=2 then
+    update public.couple_daily_questions set revealed_at=now() where id=q.id;
+    insert into public.messages(couple_id,sender_id,type,text,metadata)
+      values(q.couple_id,auth.uid(),'event','Habéis respondido a la pregunta del día',jsonb_build_object('kind','question','questionId',q.id));
+    insert into public.notifications(user_id,couple_id,dedupe_key,title,body,kind,data,expires_at)
+      select user_id,q.couple_id,'question:'||q.id||':'||user_id,'Vuestras respuestas están listas','Ya podéis descubrir las dos respuestas','status',
+        jsonb_build_object('screen','Preguntas','questionId',q.id),q.closes_at
+      from public.couple_members where couple_id=q.couple_id on conflict do nothing;
+  end if;
+end $$;
+revoke all on function public.answer_daily_question(uuid,text,integer) from public;
+grant execute on function public.answer_daily_question(uuid,text,integer) to authenticated;
+
+create or replace function public.skip_daily_question(p_question_id uuid,p_skip boolean)
+returns void language plpgsql security definer set search_path=public as $$
+declare q public.couple_daily_questions;
+begin
+  select * into q from public.couple_daily_questions where id=p_question_id and couple_id=public.current_couple_id() for update;
+  if auth.uid() is null or q.id is null or not public.is_complete_couple(q.couple_id) then raise exception 'Pregunta no disponible' using errcode='42501'; end if;
+  if p_skip is null then raise exception 'Opción no válida' using errcode='22023'; end if;
+  if q.revealed_at is not null or q.closes_at<=now() then raise exception 'La pregunta ha terminado' using errcode='22023'; end if;
+  if p_skip then
+    delete from public.question_answers where question_id=q.id and user_id=auth.uid();
+    insert into public.question_skips values(q.id,auth.uid()) on conflict do nothing;
+  else
+    delete from public.question_skips where question_id=q.id and user_id=auth.uid();
+  end if;
+  update public.couple_daily_questions set updated_at=now() where id=q.id;
+end $$;
+revoke all on function public.skip_daily_question(uuid,boolean) from public;
+grant execute on function public.skip_daily_question(uuid,boolean) to authenticated;
+
+-- Answers are fetched under RLS after the question changes; do not broadcast their text.
+do $$ begin
+  if not exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='couple_daily_questions') then
+    alter publication supabase_realtime add table public.couple_daily_questions;
+  end if;
+end $$;
+
+create or replace function public.create_custom_daily_question(p_couple_id uuid,p_expected_user_id uuid,p_expected_day date,p_prompt text)
+returns public.couple_daily_questions language plpgsql security definer set search_path=public as $$
+declare day date:=(now() at time zone 'Europe/Madrid')::date; result public.couple_daily_questions;
+begin
+  if auth.uid() is null or auth.uid() is distinct from p_expected_user_id or p_couple_id is distinct from public.current_couple_id()
+    or not public.is_complete_couple(p_couple_id) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if p_expected_day is distinct from day then raise exception 'El día ha cambiado. Actualiza la pregunta' using errcode='22023'; end if;
+  if p_prompt is null or char_length(trim(p_prompt)) not between 1 and 500 then raise exception 'Escribe una pregunta de hasta 500 caracteres' using errcode='22023'; end if;
+  perform 1 from public.couples where id=p_couple_id for update;
+  select * into result from public.couple_daily_questions where couple_id=p_couple_id and local_day=day;
+  if result.id is not null then
+    if result.category='custom' and result.prompt=trim(p_prompt) then return result; end if;
+    raise exception 'Ya hay una pregunta elegida para hoy' using errcode='22023';
+  end if;
+  insert into public.couple_daily_questions(couple_id,local_day,prompt,category,closes_at)
+    values(p_couple_id,day,trim(p_prompt),'custom',(day+1)::timestamp at time zone 'Europe/Madrid') returning * into result;
+  return result;
+end $$;
+revoke all on function public.create_custom_daily_question(uuid,uuid,date,text) from public;
+grant execute on function public.create_custom_daily_question(uuid,uuid,date,text) to authenticated;
+
+create table if not exists public.question_preferences (
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  categories text[] not null default array['fun','romantic','deep','custom'],
+  adult_consent_at timestamptz,
+  primary key(couple_id,user_id),
+  check(categories <@ array['fun','romantic','deep','custom','intimate']::text[])
+);
+alter table public.question_preferences enable row level security;
+revoke all on public.question_preferences from anon,authenticated;
+grant select on public.question_preferences to authenticated;
+drop policy if exists question_preferences_read on public.question_preferences;
+create policy question_preferences_read on public.question_preferences for select to authenticated
+  using(user_id=auth.uid() and couple_id=public.current_couple_id());
+
+create or replace function public.question_category_enabled(p_couple_id uuid,p_category text)
+returns boolean language sql stable security definer set search_path=public as $$
+  select public.is_complete_couple(p_couple_id) and
+    (select count(*)=2 from public.couple_members m left join public.question_preferences p on p.couple_id=m.couple_id and p.user_id=m.user_id
+      where m.couple_id=p_couple_id and p_category=any(coalesce(p.categories,array['fun','romantic','deep','custom']))
+        and (p_category<>'intimate' or p.adult_consent_at is not null));
+$$;
+revoke all on function public.question_category_enabled(uuid,text) from public,anon,authenticated;
+
+create or replace function public.get_question_preferences()
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); mine text[]; available text[];
+begin
+  if auth.uid() is null or c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  select categories into mine from public.question_preferences where couple_id=c and user_id=auth.uid();
+  select coalesce(array_agg(category),array[]::text[]) into available from unnest(array['fun','romantic','deep','custom','intimate']) category
+    where public.question_category_enabled(c,category);
+  return jsonb_build_object('mine',coalesce(mine,array['fun','romantic','deep','custom']),'available',available);
+end $$;
+revoke all on function public.get_question_preferences() from public;
+grant execute on function public.get_question_preferences() to authenticated;
+
+create or replace function public.set_question_category(p_category text,p_enabled boolean,p_adult_confirmed boolean,p_expected_user_id uuid,p_couple_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+begin
+  if auth.uid() is null or auth.uid() is distinct from p_expected_user_id or p_couple_id is distinct from public.current_couple_id()
+    or not public.is_complete_couple(p_couple_id) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  if p_category is null or p_category not in ('fun','romantic','deep','custom','intimate') or p_enabled is null then raise exception 'Categoría no válida' using errcode='22023'; end if;
+  if p_category='intimate' and p_enabled and p_adult_confirmed is distinct from true then
+    raise exception 'Debes confirmar que eres mayor de edad y quieres activar esta categoría' using errcode='22023';
+  end if;
+  perform 1 from public.couples where id=p_couple_id for update;
+  insert into public.question_preferences(couple_id,user_id) values(p_couple_id,auth.uid()) on conflict do nothing;
+  update public.question_preferences set categories=case when p_enabled then array_append(array_remove(categories,p_category),p_category) else array_remove(categories,p_category) end,
+    adult_consent_at=case when p_category='intimate' then case when p_enabled then now() else null end else adult_consent_at end
+    where couple_id=p_couple_id and user_id=auth.uid();
+  return public.get_question_preferences();
+end $$;
+revoke all on function public.set_question_category(text,boolean,boolean,uuid,uuid) from public;
+grant execute on function public.set_question_category(text,boolean,boolean,uuid,uuid) to authenticated;
+
+create or replace function public.enforce_question_category()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if not public.question_category_enabled(new.couple_id,new.category) then raise exception 'Categoría no disponible para ambos' using errcode='22023'; end if;
+  return new;
+end $$;
+revoke all on function public.enforce_question_category() from public,anon,authenticated;
+drop trigger if exists enforce_question_category on public.couple_daily_questions;
+create trigger enforce_question_category before insert on public.couple_daily_questions for each row execute function public.enforce_question_category();
+
+insert into public.question_bank(id,category,prompt) values
+ ('a1150000-0000-4000-8000-000000000007','intimate','¿Qué gesto de cercanía física te resulta agradable y cómo prefieres pedirlo?'),
+ ('a1150000-0000-4000-8000-000000000008','intimate','¿Qué límites y cuidados nos ayudan a sentirnos cómodos en nuestra intimidad?')
+on conflict(id) do nothing;
+create or replace function public.get_daily_question(p_category text default 'fun')
+returns public.couple_daily_questions language plpgsql security definer set search_path=public as $$
+declare c uuid:=public.current_couple_id(); day date:=(now() at time zone 'Europe/Madrid')::date;
+  result public.couple_daily_questions; chosen public.question_bank;
+begin
+  if auth.uid() is null or c is null or not public.is_complete_couple(c) then raise exception 'Pareja no disponible' using errcode='42501'; end if;
+  perform 1 from public.couples where id=c for update;
+  select * into result from public.couple_daily_questions where couple_id=c and local_day=day;
+  if result.id is not null then return result; end if;
+  -- The insert trigger checks both members' category preferences.
+  if p_category is null or p_category not in ('fun','romantic','deep','intimate') then raise exception 'Categoría no disponible' using errcode='22023'; end if;
+  select * into chosen from public.question_bank where active and category=p_category and couple_id is null
+    order by (select max(q.local_day) from public.couple_daily_questions q where q.couple_id=c and q.question_id=question_bank.id) asc nulls first,id limit 1;
+  if chosen.id is null then raise exception 'No hay preguntas en esta categoría' using errcode='22023'; end if;
+  insert into public.couple_daily_questions(couple_id,local_day,question_id,prompt,category,closes_at)
+    values(c,day,chosen.id,chosen.prompt,chosen.category,(day+1)::timestamp at time zone 'Europe/Madrid') returning * into result;
+  return result;
+end $$;
+revoke all on function public.get_daily_question(text) from public;
+grant execute on function public.get_daily_question(text) to authenticated;
+
 commit;

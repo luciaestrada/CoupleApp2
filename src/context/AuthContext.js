@@ -178,6 +178,11 @@ export function AuthProvider({ children }) {
     }
     resetPushRegistration();
     localStorage.removeItem(`coupleapp.chat.${session?.user?.id}`);
+    const draftPrefix = 'coupleapp.draft.' + session?.user?.id + '.';
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(draftPrefix)) localStorage.removeItem(key);
+    }
     const { error: signOutError } = await supabase.auth.signOut({
       scope: 'local',
     });

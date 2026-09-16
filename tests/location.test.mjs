@@ -40,6 +40,9 @@ test('ubicación: caducidad, ahorro y consentimiento', () => {
     'balanced',
   );
   assert.equal(shouldPublish(null, sample, 'off', now), false);
+  assert.equal(effectiveMode({ location_mode: 'live', powerSave: true,
+    live_until: new Date(now + 60000).toISOString() }, now), 'balanced');
+  assert.match(locationAgeLabel(new Date(now - 18 * 3600_000).toISOString(), now), /18 h/);
 });
 test('ubicación: descarta ruido, muestras antiguas y precisión insuficiente', () => {
   assert.equal(shouldPublish(null, sample, 'balanced', now), true);
@@ -128,6 +131,10 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   let positionCallback;
   let rpcResolve;
   let watchers = 0;
+  let requestedOptions;
+  let lowPowerMode = false;
+  let backgroundGranted = false;
+  let activityRunning = false;
   const sent = [];
   const Location = {
     Accuracy: { High: 6, Balanced: 3 },
@@ -137,8 +144,10 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     stopLocationUpdatesAsync: async () => {},
     getForegroundPermissionsAsync: async () => ({ granted: true }),
     hasServicesEnabledAsync: async () => true,
-    getBackgroundPermissionsAsync: async () => ({ granted: false }),
+    getBackgroundPermissionsAsync: async () => ({ granted: backgroundGranted }),
+    startLocationUpdatesAsync: async (_task, options) => { requestedOptions = options; },
     watchPositionAsync: async (options, callback) => {
+      requestedOptions = options;
       watchers++;
       positionCallback = callback;
       return {
@@ -155,6 +164,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
       }),
     },
     rpc: async (name, args) => {
+      if (name==='get_tracking_config') return {data:JSON.parse(storage.get('coupleapp.tracking')??'null'),error:null};
       sent.push(args);
       return new Promise((resolve) => {
         rpcResolve = resolve;
@@ -164,7 +174,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   globalThis.__trackingTest = {
     Location,
     TaskManager: { isTaskDefined: () => false, defineTask: () => {} },
-    Battery: { getPowerStateAsync: async () => ({ batteryLevel: 1 }) },
+    Battery: { getPowerStateAsync: async () => ({ batteryLevel: 1, lowPowerMode }) },
     Crypto: { randomUUID },
     AppState: { currentState: 'active' },
     Platform: { OS: 'ios' },
@@ -172,6 +182,8 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     getDeviceId: () => 'device-a',
     effectiveMode,
     shouldPublish,
+    startActivityTracking: async()=>{ activityRunning = true; },
+    stopActivityTracking:async()=>{ activityRunning = false; }, readActivity:async()=>null,
   };
   const source = (
     await readFile(
@@ -180,7 +192,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     )
   ).replace(/^import .*;\r?\n/gm, '');
   const engine = await import(
-    `data:text/javascript;base64,${Buffer.from('const {Location,TaskManager,Battery,Crypto,AppState,Platform,supabase,getDeviceId,effectiveMode,shouldPublish}=globalThis.__trackingTest;\n' + source).toString('base64')}`
+    `data:text/javascript;base64,${Buffer.from('const {Location,TaskManager,Battery,Crypto,AppState,Platform,supabase,getDeviceId,effectiveMode,shouldPublish,startActivityTracking,stopActivityTracking,readActivity}=globalThis.__trackingTest;\n' + source).toString('base64')}`
   );
   const config = {
     userId: 'user-a',
@@ -221,6 +233,31 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     engine.allowTracking('user-a');
     await engine.configureTracking(config);
     assert.equal(watchers, 1);
+    backgroundGranted = true;
+    globalThis.__trackingTest.AppState.currentState = 'background';
+    const liveConfig = { ...config, background_enabled: true,
+      location_mode: 'live', live_until: new Date(Date.now() + 60000).toISOString() };
+    await engine.configureTracking(liveConfig);
+    assert.equal(requestedOptions.accuracy, Location.Accuracy.High);
+    assert.equal(requestedOptions.pausesUpdatesAutomatically, false);
+    lowPowerMode = true;
+    await engine.configureTracking(liveConfig);
+    assert.equal(requestedOptions.accuracy, Location.Accuracy.Balanced);
+    assert.equal(requestedOptions.timeInterval, 300000);
+    assert.equal(requestedOptions.pausesUpdatesAutomatically, true);
+    assert.equal(effectiveMode(JSON.parse(storage.get('coupleapp.tracking'))), 'balanced');
+    lowPowerMode = false;
+    await engine.configureTracking({ ...config, background_enabled: true });
+    assert.equal(requestedOptions.timeInterval, 180000);
+    assert.equal(requestedOptions.distanceInterval, 100);
+    assert.equal(activityRunning, true);
+    await engine.configureTracking(null);
+    assert.equal(activityRunning, false, 'Una configuración revocada también detiene el reconocimiento nativo');
+    await engine.configureTracking({ ...config, location_options: { low_battery_mode: 'off' } });
+    lowPowerMode = true;
+    await engine.configureTracking({ ...config, location_options: { low_battery_mode: 'off' } });
+    assert.equal(activityRunning, false, 'La pausa por batería no deja sensores activos');
+    assert.equal(storage.has('coupleapp.trackingPaused.user-a'), false, 'La pausa por batería no se convierte en una pausa voluntaria');
   } finally {
     await engine.stopTracking();
     delete globalThis.__trackingTest;
@@ -287,6 +324,21 @@ test('geofences: no consulta servicios nativos sin permiso permanente y se recup
     granted = false;
     assert.equal(await module.registerGeofences(places), false);
     assert.equal(starts, 1);
+    granted = true;
+    await module.registerGeofences(places);
+    localStorage.setItem('coupleapp.geofence.events', JSON.stringify([{ id: 'pending' }]));
+    const delayedRegistration = module.registerGeofences(places);
+    const paused = module.pauseGeofences();
+    assert.equal(module.areGeofencesPaused(), true);
+    assert.equal(localStorage.getItem('coupleapp.geofence.events'), null);
+    await Promise.all([delayedRegistration, paused]);
+    assert.equal(running, false, 'Una sincronización anterior no anula la pausa');
+    await module.registerGeofences(places);
+    await module.flushGeofenceEvents();
+    assert.equal(running, false, 'La pausa sigue vigente aunque se registren lugares de nuevo');
+    module.resumeGeofences();
+    await module.registerGeofences(places);
+    assert.equal(running, true, 'Solo la reanudación explícita vuelve a registrar regiones');
   } finally {
     delete globalThis.__geofenceTest;
   }

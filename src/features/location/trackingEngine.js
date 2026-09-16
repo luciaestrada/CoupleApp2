@@ -2,6 +2,9 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as Battery from 'expo-battery';
 import * as Crypto from 'expo-crypto';
+import { DeviceMotion } from 'expo-sensors';
+import { createLiveSampler } from './liveSampler';
+import { startActivityTracking, stopActivityTracking, readActivity } from './activityService';
 import { AppState, Platform } from 'react-native';
 import { supabase } from '../../supabase/client';
 import { getDeviceId } from '../../services/deviceService';
@@ -19,6 +22,12 @@ let lastSample;
 let failures = 0;
 let nativeQueue = Promise.resolve();
 let listener = () => {};
+let syncPromise;
+let lastConfigSync = 0;
+let sampledForeground = false;
+let motionSubscription;
+let lastPowerRead = 0;
+let cachedPower = {};
 
 function read(key) {
   try {
@@ -29,7 +38,8 @@ function read(key) {
 }
 
 function emit(status, error = null) {
-  listener({ status, error });
+  const config = read(CONFIG_KEY);
+  listener({ status, error, autoLiveUntil: config?.auto_live_until ?? null });
 }
 export function onTrackingStatus(callback) {
   listener = callback;
@@ -52,6 +62,9 @@ export async function stopTracking({ clear = true } = {}) {
   generation += 1;
   watcher?.remove();
   watcher = null;
+  motionSubscription?.remove();
+  motionSubscription = null;
+  sampledForeground = false;
   clearTimeout(retryTimer);
   clearTimeout(expiryTimer);
   lastSample = null;
@@ -63,7 +76,10 @@ export async function stopTracking({ clear = true } = {}) {
     localStorage.removeItem(QUEUE_KEY);
   }
   emit('paused');
-  await nativeOperation(stopNative);
+  await nativeOperation(async () => {
+    try { await stopNative(); }
+    finally { await stopActivityTracking().catch(() => {}); }
+  });
 }
 
 export async function flushLocation() {
@@ -130,13 +146,29 @@ export async function flushLocation() {
 }
 
 async function acceptLocation(location, expectedGeneration = generation) {
+  if (Date.now() - lastConfigSync > 30_000)
+    await syncTrackingConfig().catch(() => {});
   if (expectedGeneration !== generation) return;
   const config = read(CONFIG_KEY);
   const mode = effectiveMode(config);
   if (mode === 'off') {
-    await stopTracking();
+    await stopTracking({clear: !config || config.location_mode === 'off' || config.location_mode === 'live'});
     return;
   }
+  if (Date.now() - lastPowerRead > 30000) {
+    cachedPower = await Battery.getPowerStateAsync().catch(() => ({}));
+    lastPowerRead = Date.now();
+    if (expectedGeneration !== generation) return;
+    const powerSave = cachedPower.lowPowerMode ||
+      (cachedPower.batteryLevel >= 0 && cachedPower.batteryLevel < ((config.location_options?.battery_threshold ?? 20) / 100));
+    if (typeof cachedPower.lowPowerMode === 'boolean' && !!config.powerSave !== !!powerSave) {
+      await configureTracking({ ...config, powerSave });
+      return;
+    }
+  }
+  if (expectedGeneration !== generation) return;
+  const activity = config.location_options?.share_activity === false ? null : await readActivity().catch(() => null);
+  if (expectedGeneration !== generation) return;
   const sample = {
     user_id: config.userId,
     sample_id: Crypto.randomUUID(),
@@ -148,8 +180,14 @@ async function acceptLocation(location, expectedGeneration = generation) {
     approximate: !!config.approximate,
     speed_mps: location.coords.speed,
     heading: location.coords.heading,
+    activity: activity?.activity ?? 'unknown',
+    activity_confidence: activity?.confidence ?? 'low',
+    battery_level: Number.isFinite(cachedPower.batteryLevel) && cachedPower.batteryLevel >= 0
+      ? Math.round(cachedPower.batteryLevel * 100) : null,
+    charging: cachedPower.batteryState == null ? null :
+      cachedPower.batteryState === Battery.BatteryState?.CHARGING || cachedPower.batteryState === Battery.BatteryState?.FULL,
   };
-  if (shouldPublish(lastSample, sample, mode)) {
+  if (shouldPublish(lastSample, sample, mode, Date.now(), { ...config.location_options, trip_active: config.trip_active })) {
     lastSample = sample;
     localStorage.setItem(
       QUEUE_KEY,
@@ -179,6 +217,49 @@ export function allowTracking(userId) {
   localStorage.removeItem(`coupleapp.trackingPaused.${userId}`);
 }
 
+export async function syncTrackingConfig() {
+  if (syncPromise) return syncPromise;
+  const current = generation;
+  lastConfigSync = Date.now();
+  syncPromise = (async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || current !== generation ||
+      localStorage.getItem(`coupleapp.trackingPaused.${session.user.id}`)) return;
+    const { data, error } = await supabase.rpc('get_tracking_config', { p_device_id: getDeviceId() });
+    if (error) throw error;
+    if (current !== generation || (data && data.userId !== session.user.id)) return;
+    const previous = read(CONFIG_KEY);
+    // A settings snapshot remains the authority for baseline sharing. Push
+    // cannot opt a device into tracking when its local configuration is absent.
+    if (!previous || previous.userId !== session.user.id) return;
+    if (!data) { await stopTracking({ clear: false }); localStorage.removeItem(CONFIG_KEY); return; }
+    const same = ['location_mode','live_until','tracking_device_id','background_enabled','auto_live_enabled','trip_active']
+      .every(key => previous[key] === data[key]) && JSON.stringify(previous.location_options) === JSON.stringify(data.location_options);
+    const next = { ...data, powerSave: previous.powerSave, approximate: previous.approximate };
+    if (same && previous.acquisitionMode === effectiveMode(next)) {
+      next.acquisitionMode = previous.acquisitionMode;
+      localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+      armExpiry(next);
+      emit(effectiveMode(next) === 'off' ? 'paused' : 'waiting');
+    } else await configureTracking(data);
+  })().finally(() => { syncPromise = null; });
+  return syncPromise;
+}
+
+function armExpiry(config) {
+  clearTimeout(expiryTimer);
+  if (config.location_mode === 'live') {
+    expiryTimer = setTimeout(() => void stopTracking().catch(() => {}),
+      Math.max(0, Date.parse(config.live_until) - Date.now()));
+  } else if (Date.parse(config.auto_live_until) > Date.now()) {
+    expiryTimer = setTimeout(() => {
+      const latest = read(CONFIG_KEY);
+      if (latest?.userId !== config.userId) return;
+      void configureTracking({ ...latest, auto_live_until: null }).catch(() => {});
+    }, Math.max(0, Date.parse(config.auto_live_until) - Date.now()));
+  }
+}
+
 export async function configureTracking(config) {
   const stopping = stopTracking({ clear: false });
   const current = generation;
@@ -188,7 +269,7 @@ export async function configureTracking(config) {
     !config ||
     localStorage.getItem(`coupleapp.trackingPaused.${config.userId}`) ||
     config.tracking_device_id !== getDeviceId() ||
-    effectiveMode(config) === 'off'
+    effectiveMode(config ? { ...config, powerSave: false } : null) === 'off'
   ) {
     localStorage.removeItem(CONFIG_KEY);
     localStorage.removeItem(QUEUE_KEY);
@@ -209,38 +290,66 @@ export async function configureTracking(config) {
     emit('unavailable', 'Activa la ubicación y sus permisos en Cuenta.');
     return;
   }
-  const mode = effectiveMode(
-    config,
-    Date.now(),
-    power.lowPowerMode || (power.batteryLevel >= 0 && power.batteryLevel < 0.2),
-  );
+  cachedPower = power;
+  lastPowerRead = Date.now();
+  const powerSave =
+    power.lowPowerMode || (power.batteryLevel >= 0 && power.batteryLevel < ((config.location_options?.battery_threshold ?? 20) / 100));
+  const mode = effectiveMode({ ...config, powerSave });
   config = {
     ...config,
+    powerSave,
+    acquisitionMode: mode,
     approximate:
+      config.shared_precision === 'approximate' ||
       permission.ios?.accuracy === 'reduced' ||
       permission.android?.accuracy === 'coarse',
   };
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  if (mode === 'off') { emit('paused', 'Ubicación temporalmente detenida por tu ajuste de batería.'); return; }
   const live = mode === 'live' && !config.approximate;
-  if (config.location_mode === 'live')
-    expiryTimer = setTimeout(
-      () => void stopTracking().catch(() => {}),
-      Math.max(0, Date.parse(config.live_until) - Date.now()),
-    );
+  const useBackground = config.background_enabled && background.granted;
+  await nativeOperation(async () => {
+    if (current !== generation) return;
+    if (config.location_options?.share_activity !== false) await startActivityTracking().catch(() => {});
+    else await stopActivityTracking().catch(() => {});
+  });
+  if (current !== generation) return;
+  armExpiry(config);
   const options = {
     accuracy: live ? Location.Accuracy.High : Location.Accuracy.Balanced,
-    distanceInterval: live ? 5 : 50,
-    timeInterval: live ? 5_000 : 60_000,
+    distanceInterval: live || config.trip_active ? 0 : powerSave ? 200 : (config.location_options?.normal_distance ?? (useBackground ? 100 : 50)),
+    timeInterval: live
+      ? (config.location_options?.live_interval ?? 5) * 1000
+      : powerSave
+        ? 300_000
+        : useBackground
+          ? (config.location_options?.normal_interval ?? 180) * 1000
+          : (config.location_options?.normal_interval ?? 60) * 1000,
   };
-  if (config.background_enabled && background.granted) {
+  if (live && AppState.currentState === 'active') {
+    sampledForeground = true;
+    const sampler = createLiveSampler({
+      interval: (config.location_options?.live_interval ?? 20) * 1000,
+      watch: callback => Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 }, callback),
+      onFix: location => void acceptLocation(location, current).catch(() => emit('unavailable', 'No se pudo compartir la ubicación.')),
+      onError: () => emit('unavailable', 'No se pudo obtener una posición reciente. Se reintentará.'),
+    });
+    watcher = sampler;
+    void Promise.all([DeviceMotion.isAvailableAsync(), DeviceMotion.getPermissionsAsync()])
+      .then(([available, permission]) => {
+        if (current !== generation || !available || !permission.granted || config.location_options?.motion_assist === false) return;
+        DeviceMotion.setUpdateInterval(250);
+        motionSubscription = DeviceMotion.addListener(event => sampler.motion(event));
+      }).catch(() => {});
+  } else if (useBackground) {
     await nativeOperation(async () => {
       if (current !== generation) return;
       await Location.startLocationUpdatesAsync(TRACKING_TASK, {
         ...options,
-        pausesUpdatesAutomatically: true,
+        pausesUpdatesAutomatically: !live,
         activityType: Location.LocationActivityType.Other,
-        deferredUpdatesInterval: live ? 0 : 180_000,
-        deferredUpdatesDistance: live ? 0 : 100,
+        deferredUpdatesInterval: live ? 0 : options.timeInterval,
+        deferredUpdatesDistance: live ? 0 : options.distanceInterval,
         showsBackgroundLocationIndicator: true,
         ...(Platform.OS === 'android'
           ? {
@@ -285,5 +394,12 @@ export async function configureTracking(config) {
 export function suspendForegroundTracking() {
   watcher?.remove();
   watcher = null;
+  motionSubscription?.remove();
+  motionSubscription = null;
+  if (sampledForeground) {
+    sampledForeground = false;
+    const config = read(CONFIG_KEY);
+    if (config) void configureTracking(config).catch(() => {});
+  }
   clearTimeout(retryTimer);
 }

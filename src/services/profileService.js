@@ -10,6 +10,7 @@ export function normalizeProfile(profile) {
       text: profile.status_text,
       emoji: profile.status_emoji,
       updatedAt: profile.status_updated_at,
+      expiresAt: profile.status_expires_at ?? (profile.status_updated_at ? new Date(Date.parse(profile.status_updated_at)+86400000).toISOString() : null),
     },
   };
 }
@@ -17,7 +18,7 @@ export function normalizeProfile(profile) {
 export async function getProfile(userId) {
   const { data, error } = await supabase
     .from('profiles')
-    .select('id,name,avatar_url,status_text,status_emoji,status_updated_at')
+    .select('*')
     .eq('id', userId)
     .single();
 

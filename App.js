@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Alert, AppState } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -11,6 +12,7 @@ import {
   startNotificationResponses,
 } from './src/services/notificationService';
 import { startGeofenceSync } from './src/services/geofenceService';
+import { startAffectionFeedback } from './src/services/affectionFeedbackService';
 import {
   registerGeofences,
   flushGeofenceEvents,
@@ -20,6 +22,10 @@ function Bootstrap() {
   useEffect(() => startNotificationResponses(() => {}), []);
   const { user, userProfile, loading: authLoading } = useAuth();
   const { couple, loading: coupleLoading } = useCouple();
+  useEffect(() => {
+    if (authLoading || coupleLoading || !user?.id || couple?.members.length !== 2) return;
+    return startAffectionFeedback(couple.id,user.id);
+  },[authLoading,coupleLoading,user?.id,couple?.id,couple?.members.length]);
 
   useEffect(() => {
     if (!userProfile?.id) return undefined;
@@ -60,13 +66,17 @@ function Bootstrap() {
 
 export default function App() {
   return (
-    <SafeAreaProvider><AuthProvider>
-      <CoupleProvider>
-        <StatusBar style="dark" />
-        <TrackingProvider>
-          <Bootstrap />
-        </TrackingProvider>
-      </CoupleProvider>
-    </AuthProvider></SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <CoupleProvider>
+          <StatusBar style="dark" />
+          <TrackingProvider>
+            <Bootstrap />
+          </TrackingProvider>
+        </CoupleProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

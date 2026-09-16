@@ -322,6 +322,20 @@ test('SQL: la migración conserva cuentas, pareja y mensajes existentes', async 
       ).rows[0].n,
       2,
     );
+    // Reproduce a partially applied update, including the reported existing column.
+    await db.exec('alter table public.user_settings add column auto_live_enabled boolean not null default false');
+    await db.exec(await readFile(new URL('../supabase/migrations/20260909000100_map_view_sessions.sql',import.meta.url),'utf8'));
+    const upgrade = await readFile(new URL('../docs/ACTUALIZACION_UBICACION.sql',import.meta.url),'utf8');
+    await db.exec(upgrade);
+    await db.query('update public.user_settings set auto_live_enabled=true where user_id=$1',[a]);
+    const originalFix = (await db.query("select pg_get_functiondef('public.publish_location_fix(jsonb)'::regprocedure) as definition")).rows[0].definition;
+    await db.exec(upgrade);
+    assert.equal((await db.query("select pg_get_functiondef('public.publish_location_fix(jsonb)'::regprocedure) as definition")).rows[0].definition, originalFix, 'Reejecutar no reemplaza el publicador privado por una función recursiva');
+    assert.equal((await db.query('select auto_live_enabled from public.user_settings where user_id=$1',[a])).rows[0].auto_live_enabled,true);
+    assert.equal((await db.query('select text from public.messages')).rows[0].text,'Conservar este mensaje');
+    assert.equal((await db.query('select count(*)::int n from auth.users')).rows[0].n,2);
+    assert.equal((await db.query('select count(*)::int n from public.couple_members')).rows[0].n,2);
+    assert.equal((await db.query('select auto_live_enabled from public.user_settings where user_id=$1',[b])).rows[0].auto_live_enabled,false);
   } finally {
     await db.close();
   }

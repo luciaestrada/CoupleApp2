@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   ActivityIndicator,
   View,
@@ -23,8 +24,10 @@ import { colors } from '../ui/theme';
 import { EmptyState } from '../ui/components';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { todayInMadrid } from '../utils/dateUtils';
+import TripPreview from '../ui/TripPreview';
+import { activityLabel } from '../features/home/activity';
 
-export default function ChatScreen() {
+export default function ChatScreen({ navigation }) {
   const { userId, partnerId, couple } = usePairedAppContext();
   const [pending, setPending] = useState(() => getPendingMessages(userId));
   const [older, setOlder] = useState([]);
@@ -37,17 +40,31 @@ export default function ChatScreen() {
   const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(true);
   const [sendingLove, setSendingLove] = useState(false);
-  function changeText(value) { setText(value); if (value) localStorage.setItem(draftKey, value); else localStorage.removeItem(draftKey); }
+  const [tripId,setTripId] = useState(null);
+  function changeText(value) {
+    setText(value);
+    if (value) localStorage.setItem(draftKey, value);
+    else localStorage.removeItem(draftKey);
+  }
   const [error, setError] = useState(null);
   const [sending, setSending] = useState(false);
 
-  useEffect(() => {
-    return watchMessages(couple.id, { onData: (items) => { setMessages(items); setLoading(false); }, onError: (e) => { setError(e); setLoading(false); } });
-  }, [couple.id]);
+  useFocusEffect(useCallback(() => {
+    return watchMessages(couple.id, {
+      onData: (items) => {
+        setMessages(items);
+        setLoading(false);
+      },
+      onError: (e) => {
+        setError(e);
+        setLoading(false);
+      },
+    });
+  }, [couple.id]));
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     return watchStreaks(couple.id, { onData: setStreaks, onError: setError });
-  }, [couple.id]);
+  }, [couple.id]));
 
   async function handleSend() {
     if (!text.trim() || sending) return;
@@ -90,17 +107,22 @@ export default function ChatScreen() {
     <KeyboardAvoidingView
       style={styles.container}
       keyboardVerticalOffset={headerHeight}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.streakBar}>
         <Text style={styles.streakText}>
           🔥 Tú {myStreak} · Pareja {partnerStreak}
         </Text>
-        <TouchableOpacity disabled={sentLoveToday || sendingLove} onPress={handleSendLove} accessibilityRole="button" style={{ minHeight: 48, justifyContent: 'center' }}>
+        <TouchableOpacity
+          disabled={sendingLove}
+          onPress={handleSendLove}
+          accessibilityRole="button"
+          style={{ minHeight: 48, justifyContent: 'center' }}
+        >
           <Text
-            style={[styles.loveTapButton, sentLoveToday && styles.disabledText]}
+            style={styles.loveTapButton}
           >
-            {sentLoveToday ? '✓ Enviado hoy' : '💜 Enviar amor'}
+            {sentLoveToday ? '💜 Enviar otra vez' : '💜 Enviar amor'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -109,7 +131,18 @@ export default function ChatScreen() {
 
       <FlatList
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={loading ? <ActivityIndicator style={{ padding: 32 }} color={colors.primary} /> : <View style={{ transform: [{ scaleY: -1 }] }}><EmptyState title="Vuestra conversación empieza aquí" description="Un saludo, una idea o algo que te haya hecho sonreír." /></View>}
+        ListEmptyComponent={
+          loading ? (
+            <ActivityIndicator style={{ padding: 32 }} color={colors.primary} />
+          ) : (
+            <View>
+              <EmptyState
+                title="Vuestra conversación empieza aquí"
+                description="Un saludo, una idea o algo que te haya hecho sonreír."
+              />
+            </View>
+          )
+        }
         data={[
           ...messages,
           ...older.filter(
@@ -154,18 +187,40 @@ export default function ChatScreen() {
                 : styles.bubbleTheirs,
             ]}
           >
+            {item.type==='event' && <Text style={{fontSize:11,color:item.senderId===userId?'#FFE9F0':colors.muted}}>
+              {item.senderId===userId?'Tú':'Tu pareja'} · {activityLabel(item)}
+            </Text>}
             <Text
               style={[
                 styles.bubbleText,
                 item.senderId === userId && { color: '#fff' },
               ]}
             >
-              {item.loveTap ? '💜' : item.text}
+              {item.loveTap ? item.text || '💜' : item.text}
             </Text>
-            <Text style={{ fontSize: 11, marginTop: 5, alignSelf: 'flex-end', color: item.senderId === userId ? '#FFE9F0' : colors.muted }}>{new Date(item.createdAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</Text>
+            {item.metadata?.kind==='story' && <TouchableOpacity accessibilityRole="button" onPress={()=>navigation.navigate('Historias')} style={{minHeight:48,justifyContent:'center'}}>
+              <Text style={{color:item.senderId===userId?'white':colors.primary}}>Ver historias disponibles</Text>
+            </TouchableOpacity>}
+            {item.metadata?.kind==='trip' && <TouchableOpacity accessibilityRole="button" onPress={()=>setTripId(item.metadata.tripId)} style={{minHeight:48,justifyContent:'center'}}>
+              <Text style={{color:item.senderId===userId?'white':colors.primary}}>Ver recorrido en el mapa</Text>
+            </TouchableOpacity>}
+            <Text
+              style={{
+                fontSize: 11,
+                marginTop: 5,
+                alignSelf: 'flex-end',
+                color: item.senderId === userId ? '#FFE9F0' : colors.muted,
+              }}
+            >
+              {new Date(item.createdAt).toLocaleTimeString('es-ES', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
           </View>
         )}
       />
+      {tripId && <TripPreview key={tripId} id={tripId} onClose={()=>setTripId(null)} />}
 
       {pending.length > 0 && (
         <View style={{ padding: 12, backgroundColor: '#FFF8E6' }}>
@@ -196,6 +251,7 @@ export default function ChatScreen() {
         <TextInput
           style={styles.input}
           value={text}
+          editable={!sending}
           onChangeText={changeText}
           accessibilityLabel="Mensaje para tu pareja"
           multiline
@@ -206,7 +262,10 @@ export default function ChatScreen() {
         <TouchableOpacity
           disabled={sending || !text.trim()}
           accessibilityRole="button"
-          style={[styles.sendButton, (sending || !text.trim()) && { opacity: 0.4 }]}
+          style={[
+            styles.sendButton,
+            (sending || !text.trim()) && { opacity: 0.4 },
+          ]}
           onPress={handleSend}
         >
           {sending ? (
@@ -239,6 +298,7 @@ const styles = StyleSheet.create({
   bubbleText: { color: '#000' },
   inputBar: {
     flexDirection: 'row',
+    flexShrink: 0,
     padding: 12,
     borderTopWidth: 1,
     borderColor: '#eee',
@@ -254,7 +314,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
-  sendButton: { minWidth: 64, minHeight: 48, alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
+  sendButton: {
+    minWidth: 64,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
   sendButtonText: { color: colors.primary, fontWeight: '700' },
   error: { color: '#B42318', paddingHorizontal: 12, paddingVertical: 8 },
 });

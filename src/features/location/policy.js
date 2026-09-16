@@ -5,10 +5,16 @@ export function effectiveMode(config, now = Date.now(), powerSave = false) {
     (!config.live_until || Date.parse(config.live_until) <= now)
   )
     return 'off';
-  return powerSave ? 'balanced' : config.location_mode;
+  if (powerSave || config.powerSave) {
+    const policy = config.location_options?.low_battery_mode ?? 'balanced';
+    if (policy !== 'live') return policy === 'off' ? 'off' : 'balanced';
+  }
+  if (config.auto_live_enabled && Date.parse(config.auto_live_until) > now)
+    return 'live';
+  return config.location_mode;
 }
 
-export function shouldPublish(previous, sample, mode, now = Date.now()) {
+export function shouldPublish(previous, sample, mode, now = Date.now(), options = {}) {
   if (
     mode === 'off' ||
     !sample ||
@@ -37,9 +43,9 @@ export function shouldPublish(previous, sample, mode, now = Date.now()) {
   return (
     meters >=
       Math.max(
-        mode === 'live' ? 5 : 30,
+        mode === 'live' ? 5 : (options.normal_distance ?? 30),
         Math.min(sample.accuracy_m, previous.accuracy_m),
-      ) || elapsed >= (mode === 'live' ? 30_000 : 5 * 60_000)
+      ) || elapsed >= (mode === 'live' ? 30_000 : options.trip_active ? Math.min(options.normal_interval ?? 120,120) * 1000 : 5 * 60_000)
   );
 }
 
@@ -49,5 +55,10 @@ export function locationAgeLabel(capturedAt, now = Date.now()) {
   if (age < 0) return 'Hora de captura pendiente de verificar';
   if (age < 30_000) return 'Actualizada ahora';
   if (age < 60_000) return `Hace ${Math.floor(age / 1000)} s`;
-  return `Última ubicación hace ${Math.floor(age / 60_000)} min`;
+  if (age < 3600_000)
+    return `Última ubicación hace ${Math.floor(age / 60_000)} min`;
+  if (age < 86400_000)
+    return `Última ubicación hace ${Math.floor(age / 3600_000)} h`;
+  const days = Math.floor(age / 86400_000);
+  return `Última ubicación hace ${days} ${days === 1 ? 'día' : 'días'}`;
 }

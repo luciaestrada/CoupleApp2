@@ -12,6 +12,10 @@ function normalizeLocation(row) {
     accuracy: row.accuracy_m,
     speed: row.speed_mps,
     heading: row.heading,
+    batteryLevel: row.battery_level,
+    charging: row.charging,
+    activity: row.activity,
+    activityConfidence: row.activity_confidence,
   };
 }
 export function watchUserLocation(coupleId, userId, handlers) {
@@ -22,9 +26,7 @@ export function watchUserLocation(coupleId, userId, handlers) {
     async load() {
       const { data, error } = await supabase
         .from('locations')
-        .select(
-          'lat,lng,captured_at,updated_at,accuracy_m,speed_mps,heading,sharing',
-        )
+        .select('*')
         .eq('couple_id', coupleId)
         .eq('user_id', userId)
         .maybeSingle();
@@ -42,7 +44,7 @@ export async function getLocationHistory(
 ) {
   const { data, error } = await supabase
     .from('location_history')
-    .select('id,lat,lng,recorded_at')
+    .select('*')
     .eq('couple_id', coupleId)
     .eq('user_id', userId)
     .lt('recorded_at', before)
@@ -78,6 +80,19 @@ export function watchLiveRequests(coupleId, handlers) {
 }
 export async function requestLiveLocation() {
   const { error } = await supabase.rpc('request_live_location');
+  if (error) throw error;
+}
+export async function renewMapView(sessionId) {
+  const { data, error } = await supabase.rpc('renew_map_view', {
+    p_device_id: getDeviceId(), p_session_id: sessionId,
+  });
+  if (error) throw error;
+  return data;
+}
+export async function endMapView(sessionId) {
+  const { error } = await supabase.rpc('end_map_view', {
+    p_device_id: getDeviceId(), p_session_id: sessionId,
+  });
   if (error) throw error;
 }
 export async function respondLiveLocation(id, accept) {

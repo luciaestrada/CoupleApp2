@@ -40,10 +40,35 @@ import {
 } from '../utils/permissionUi';
 
 import { colors } from '../ui/theme';
+import SharingSettings from '../ui/SharingSettings';
+import AffectionSettings from '../ui/AffectionSettings';
+import QuestionSettings from '../ui/QuestionSettings';
+import { EventSettings, LocationBehaviorSettings } from '../ui/BehaviorSettings';
 function SettingsSection({ title, description, expanded, onPress, children }) {
-  return <View style={styles.card}><TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded }} onPress={onPress} style={{ minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-    <View style={{ flex: 1 }}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionDescription}>{description}</Text></View><Text style={{ fontSize: 24, color: colors.primary }}>{expanded ? '−' : '+'}</Text>
-  </TouchableOpacity>{expanded && <View style={{ paddingTop: 16, gap: 12 }}>{children}</View>}</View>;
+  return (
+    <View style={styles.card}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={onPress}
+        style={{
+          minHeight: 56,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <Text style={styles.sectionDescription}>{description}</Text>
+        </View>
+        <Text style={{ fontSize: 24, color: colors.primary }}>
+          {expanded ? '−' : '+'}
+        </Text>
+      </TouchableOpacity>
+      {expanded && <View style={{ paddingTop: 16, gap: 12 }}>{children}</View>}
+    </View>
+  );
 }
 const PERMISSION_ROWS = [
   {
@@ -205,8 +230,21 @@ export default function SettingsScreen({ navigation }) {
   }
 
   return (
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.container}>
-      <SettingsSection title="Perfil" description="Nombre, foto y contraseña" expanded={section === 0} onPress={() => setSection(section === 0 ? null : 0)}>
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={styles.container}
+    >
+      <SettingsSection title="Lo que comparto" description="Preferencias y estado real de este teléfono"
+        expanded={section === 5} onPress={() => setSection(section === 5 ? null : 5)}>
+        <SharingSettings tracking={tracking} permissions={permissions} paired={couple?.members.length === 2}
+          saving={saving} perform={perform} />
+      </SettingsSection>
+      <SettingsSection
+        title="Perfil"
+        description="Nombre, foto y contraseña"
+        expanded={section === 0}
+        onPress={() => setSection(section === 0 ? null : 0)}
+      >
         <Text style={styles.name}>{userProfile?.name ?? 'Sin nombre'}</Text>
         <Text style={styles.email}>{user.email}</Text>
         {!!userProfile?.avatarUrl && (
@@ -270,8 +308,12 @@ export default function SettingsScreen({ navigation }) {
         </Text>
       </SettingsSection>
 
-      <SettingsSection title="Permisos del teléfono" description="Controla a qué puede acceder la app" expanded={section === 1} onPress={() => setSection(section === 1 ? null : 1)}>
-        
+      <SettingsSection
+        title="Permisos del teléfono"
+        description="Controla a qué puede acceder la app"
+        expanded={section === 1}
+        onPress={() => setSection(section === 1 ? null : 1)}
+      >
         <Text style={styles.sectionDescription}>
           Cada permiso se pide solo cuando activas la función correspondiente.
         </Text>
@@ -291,7 +333,11 @@ export default function SettingsScreen({ navigation }) {
               </View>
               <TouchableOpacity
                 accessibilityRole="button"
-                disabled={!!permissionAction || !permissions || permissions?.[row.key]?.granted}
+                disabled={
+                  !!permissionAction ||
+                  !permissions ||
+                  permissions?.[row.key]?.granted
+                }
                 onPress={() => handlePermission(row.key)}
                 style={styles.permissionAction}
               >
@@ -310,8 +356,12 @@ export default function SettingsScreen({ navigation }) {
         })}
       </SettingsSection>
 
-      <SettingsSection title="Notificaciones" description="Elige qué avisos quieres recibir" expanded={section === 2} onPress={() => setSection(section === 2 ? null : 2)}>
-        
+      <SettingsSection
+        title="Notificaciones"
+        description="Elige qué avisos quieres recibir"
+        expanded={section === 2}
+        onPress={() => setSection(section === 2 ? null : 2)}
+      >
         <Text style={styles.sectionDescription}>{pushStatus.message}</Text>
         <TouchableOpacity
           disabled={saving}
@@ -335,7 +385,7 @@ export default function SettingsScreen({ navigation }) {
         {[
           ['notifications_enabled', 'Todos los avisos'],
           ['chat_enabled', 'Mensajes'],
-          ['love_enabled', 'Amor diario'],
+          ['love_enabled', 'Gestos de afecto'],
           ['geofence_enabled', 'Llegadas y solicitudes de ubicación'],
           ['dates_enabled', 'Fechas especiales'],
           ['stories_enabled', 'Historias y estados'],
@@ -358,9 +408,33 @@ export default function SettingsScreen({ navigation }) {
             <Text style={{ marginTop: 16 }}>Abrir bandeja de avisos</Text>
           </TouchableOpacity>
         )}
+        <EventSettings settings={tracking.settings} saving={saving} save={changes=>perform(()=>tracking.update(changes))} />
       </SettingsSection>
-      <SettingsSection title="Ubicación y privacidad" description="Segundo plano e historial compartido" expanded={section === 3} onPress={() => setSection(section === 3 ? null : 3)}>
-        
+      <SettingsSection title="Gestos de afecto" description="Vibración opcional en este teléfono"
+        expanded={section === 'affection'} onPress={()=>setSection(section === 'affection' ? null : 'affection')}>
+        <AffectionSettings userId={user.id}/>
+      </SettingsSection>
+      {couple?.members.length===2 && <SettingsSection title="Preguntas" description="Categorías y consentimiento de ambos"
+        expanded={section==='questions'} onPress={()=>setSection(section==='questions'?null:'questions')}>
+        <QuestionSettings coupleId={couple.id} userId={user.id}/>
+      </SettingsSection>}
+      <SettingsSection
+        title="Ubicación y privacidad"
+        description="Segundo plano e historial compartido"
+        expanded={section === 3}
+        onPress={() => setSection(section === 3 ? null : 3)}
+      >
+        <View style={styles.permissionRow}>
+          <View style={{ flex: 1 }}>
+            <Text>Sesiones automáticas al abrir el mapa</Text>
+            <Text style={styles.sectionDescription}>
+              Permite que tu pareja solicite actualizaciones frecuentes mientras mira el mapa, hasta 15 minutos. Siempre se respeta tu pausa de ubicación. En segundo plano depende de los permisos y del teléfono.
+            </Text>
+          </View>
+          <Switch accessibilityLabel="Permitir sesiones automáticas de ubicación"
+            disabled={saving} value={!!tracking.settings.auto_live_enabled}
+            onValueChange={value => perform(() => tracking.update({ auto_live_enabled: value }))} />
+        </View>
         <View style={styles.permissionRow}>
           <Text style={styles.permissionCopy}>También en segundo plano</Text>
           <Switch
@@ -382,6 +456,7 @@ export default function SettingsScreen({ navigation }) {
             }
           />
         </View>
+        <LocationBehaviorSettings settings={tracking.settings} saving={saving} save={changes=>perform(()=>tracking.update(changes))} />
         <Text style={styles.sectionDescription}>
           La sesión en vivo consume más batería. El sistema puede retrasar o
           detener las actualizaciones; la fecha de cada posición indica su
@@ -401,68 +476,77 @@ export default function SettingsScreen({ navigation }) {
           />
         </View>
       </SettingsSection>
-<SettingsSection title="Cuenta y relación" description="Cerrar sesión, desvincular o eliminar la cuenta" expanded={section === 4} onPress={() => setSection(section === 4 ? null : 4)}>
-      {couple && (
+      <SettingsSection
+        title="Cuenta y relación"
+        description="Cerrar sesión, desvincular o eliminar la cuenta"
+        expanded={section === 4}
+        onPress={() => setSection(section === 4 ? null : 4)}
+      >
+        {couple && (
+          <TouchableOpacity
+            disabled={saving}
+            onPress={() =>
+              Alert.alert(
+                'Desvincular pareja',
+                'Se borrarán los datos compartidos de ambos y se detendrá la ubicación. Las fotos se retirarán en el siguiente mantenimiento.',
+                [
+                  { text: 'Cancelar' },
+                  {
+                    text: 'Desvincular',
+                    style: 'destructive',
+                    onPress: () =>
+                      perform(async () => {
+                        await leaveCouple();
+                        await refreshCouple();
+                      }),
+                  },
+                ],
+              )
+            }
+          >
+            <Text style={[styles.signOutText, { paddingVertical: 14 }]}>
+              Desvincular pareja
+            </Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           disabled={saving}
           onPress={() =>
             Alert.alert(
-              'Desvincular pareja',
-              'Se borrarán los datos compartidos de ambos y se detendrá la ubicación. Las fotos se retirarán en el siguiente mantenimiento.',
+              'Eliminar cuenta',
+              'Se desvinculará la pareja y se solicitará el borrado definitivo de tu cuenta y archivos. El mantenimiento del servidor completará el borrado.',
               [
                 { text: 'Cancelar' },
                 {
-                  text: 'Desvincular',
+                  text: 'Eliminar mi cuenta',
                   style: 'destructive',
                   onPress: () =>
                     perform(async () => {
-                      await leaveCouple();
-                      await refreshCouple();
+                      await requestAccountDeletion();
+                      await signOut();
                     }),
                 },
               ],
             )
           }
         >
-          <Text style={[styles.signOutText, { paddingVertical: 14 }]}>Desvincular pareja</Text>
+          <Text style={[styles.signOutText, { paddingVertical: 14 }]}>
+            Eliminar mi cuenta
+          </Text>
         </TouchableOpacity>
-      )}
-      <TouchableOpacity
-        disabled={saving}
-        onPress={() =>
-          Alert.alert(
-            'Eliminar cuenta',
-            'Se desvinculará la pareja y se solicitará el borrado definitivo de tu cuenta y archivos. El mantenimiento del servidor completará el borrado.',
-            [
-              { text: 'Cancelar' },
-              {
-                text: 'Eliminar mi cuenta',
-                style: 'destructive',
-                onPress: () =>
-                  perform(async () => {
-                    await requestAccountDeletion();
-                    await signOut();
-                  }),
-              },
-            ],
-          )
-        }
-      >
-        <Text style={[styles.signOutText, { paddingVertical: 14 }]}>Eliminar mi cuenta</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        disabled={signingOut}
-        style={[styles.signOutButton, signingOut && styles.disabled]}
-        onPress={handleSignOut}
-      >
-        {signingOut ? (
-          <ActivityIndicator color="#B42318" />
-        ) : (
-          <Text style={styles.signOutText}>Cerrar sesión</Text>
-        )}
-      </TouchableOpacity>
-    </SettingsSection>
-</ScrollView>
+        <TouchableOpacity
+          disabled={signingOut}
+          style={[styles.signOutButton, signingOut && styles.disabled]}
+          onPress={handleSignOut}
+        >
+          {signingOut ? (
+            <ActivityIndicator color="#B42318" />
+          ) : (
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
+          )}
+        </TouchableOpacity>
+      </SettingsSection>
+    </ScrollView>
   );
 }
 

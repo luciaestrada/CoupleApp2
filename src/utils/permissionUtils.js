@@ -4,6 +4,10 @@ export function normalizePermission(permission) {
     granted: permission.granted === true || permission.status === 'granted',
     canAskAgain: permission.canAskAgain !== false,
     expires: permission.expires,
+    accuracy: permission.ios?.accuracy === 'reduced' || permission.android?.accuracy === 'coarse'
+      ? 'approximate'
+      : permission.ios?.accuracy === 'full' || permission.android?.accuracy === 'fine'
+        ? 'precise' : 'unknown',
   };
 }
 

@@ -66,11 +66,14 @@ export function watchQuery({
     const connect = () => {
       if (entry.channel || !entry.alive || AppState.currentState !== 'active')
         return;
-      entry.channel = createRealtimeChannel(supabase, channelName)
+      const channel = createRealtimeChannel(supabase, channelName);
+      entry.channel = channel;
+      channel
         .on(
           'postgres_changes',
           { event, schema: 'public', table, filter },
           (payload) => {
+            if (!entry.alive || entry.channel !== channel || AppState.currentState !== 'active') return;
             if (
               reduce &&
               entry.hasData &&
@@ -85,7 +88,7 @@ export function watchQuery({
           },
         )
         .subscribe((status, error) => {
-          if (!entry.alive || !entry.channel) return;
+          if (!entry.alive || entry.channel !== channel) return;
           if (status === 'SUBSCRIBED') void refresh();
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')
             report(error ?? new Error('Reconectando…'));

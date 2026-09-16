@@ -5,26 +5,43 @@ import { Buffer } from 'node:buffer';
 
 async function importSource(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
-  return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+  return import(
+    `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+  );
 }
 
 const { haversineDistanceKm } = await importSource('../src/utils/haversine.js');
-const { isIsoDate } = await importSource('../src/utils/validation.js');
-const { nextSpecialDate } = await importSource('../src/utils/specialDateUtils.js');
+const { isIsoDate, parseCalendarDate } = await importSource(
+  '../src/utils/validation.js',
+);
+const { nextSpecialDate } = await importSource(
+  '../src/utils/specialDateUtils.js',
+);
 const { daysTogether, isStreakBroken, todayInMadrid } = await importSource(
-  '../src/utils/dateUtils.js'
+  '../src/utils/dateUtils.js',
 );
 const { createRealtimeChannel, uniqueRealtimeChannelName } = await importSource(
-  '../src/utils/realtimeChannel.js'
+  '../src/utils/realtimeChannel.js',
 );
-const { normalizeNotificationPermission, normalizePermission, permissionNeedsSettings } =
-  await importSource('../src/utils/permissionUtils.js');
+const {
+  normalizeNotificationPermission,
+  normalizePermission,
+  permissionNeedsSettings,
+} = await importSource('../src/utils/permissionUtils.js');
 
 test('isIsoDate acepta fechas reales y rechaza normalizaciones y el año cero', () => {
   assert.equal(isIsoDate('2024-02-29'), true);
   assert.equal(isIsoDate('2023-02-29'), false);
   assert.equal(isIsoDate('0000-01-01'), false);
   assert.equal(isIsoDate('2024-2-9'), false);
+});
+
+test('las fechas de pantalla admiten formato español y validan el calendario', () => {
+  assert.equal(parseCalendarDate('29/02/2024'), '2024-02-29');
+  assert.equal(parseCalendarDate('31/04/2026'), null);
+  assert.equal(parseCalendarDate('29/02/2025'), null);
+  assert.equal(parseCalendarDate('2026-09-09'), '2026-09-09');
+  assert.equal(parseCalendarDate('09/09/0000'), null);
 });
 
 test('haversineDistanceKm devuelve cero para el mismo punto', () => {
@@ -39,19 +56,31 @@ test('haversineDistanceKm permanece finita para puntos antipodales', () => {
 
 test('nextSpecialDate conserva el día y avanza las recurrencias pasadas', () => {
   assert.equal(
-    nextSpecialDate('2020-08-10', true, new Date(2026, 7, 11)).toLocaleDateString('sv-SE'),
-    '2027-08-10'
+    nextSpecialDate(
+      '2020-08-10',
+      true,
+      new Date(2026, 7, 11),
+    ).toLocaleDateString('sv-SE'),
+    '2027-08-10',
   );
   assert.equal(
-    nextSpecialDate('2020-08-11', true, new Date(2026, 7, 11)).toLocaleDateString('sv-SE'),
-    '2026-08-11'
+    nextSpecialDate(
+      '2020-08-11',
+      true,
+      new Date(2026, 7, 11),
+    ).toLocaleDateString('sv-SE'),
+    '2026-08-11',
   );
 });
 
 test('nextSpecialDate adapta el 29 de febrero al último día del mes', () => {
   assert.equal(
-    nextSpecialDate('2024-02-29', true, new Date(2025, 0, 1)).toLocaleDateString('sv-SE'),
-    '2025-02-28'
+    nextSpecialDate(
+      '2024-02-29',
+      true,
+      new Date(2025, 0, 1),
+    ).toLocaleDateString('sv-SE'),
+    '2025-02-28',
   );
 });
 
@@ -72,7 +101,8 @@ test('cada watcher Realtime recibe un canal único aunque comparta nombre base',
         name,
         subscribed: false,
         on() {
-          if (this.subscribed) throw new Error('callback añadido después de subscribe');
+          if (this.subscribed)
+            throw new Error('callback añadido después de subscribe');
           return this;
         },
         subscribe() {
@@ -86,13 +116,18 @@ test('cada watcher Realtime recibe un canal único aunque comparta nombre base',
   };
 
   const first = createRealtimeChannel(client, 'streak-couple').on().subscribe();
-  const second = createRealtimeChannel(client, 'streak-couple').on().subscribe();
+  const second = createRealtimeChannel(client, 'streak-couple')
+    .on()
+    .subscribe();
 
   assert.notEqual(first, second);
   assert.notEqual(first.name, second.name);
   assert.match(first.name, /^streak-couple-/);
   assert.equal(channels.size, 2);
-  assert.notEqual(uniqueRealtimeChannelName('geofences-couple-user'), uniqueRealtimeChannelName('geofences-couple-user'));
+  assert.notEqual(
+    uniqueRealtimeChannelName('geofences-couple-user'),
+    uniqueRealtimeChannelName('geofences-couple-user'),
+  );
 });
 
 test('los permisos bloqueados se distinguen de los que aún pueden solicitarse', () => {
@@ -119,6 +154,6 @@ test('los permisos bloqueados se distinguen de los que aún pueden solicitarse',
       canAskAgain: true,
       ios: { status: 3 },
     }).granted,
-    true
+    true,
   );
 });

@@ -1,16 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import * as Crypto from 'expo-crypto';
+import { startMapViewing } from '../features/location/mapViewing';
+import { estimatePosition } from '../features/location/positionEstimate';
 import {
   Platform,
+  AppState,
   ActivityIndicator,
   Alert,
-  Image,
-  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import Constants from 'expo-constants';
+import { TouchableOpacity } from '@gorhom/bottom-sheet';
+import OpenMap from '../features/map/OpenMap';
+import { colors } from '../ui/theme';
+import MapOptionsSheet from '../ui/MapOptionsSheet';
 import MapView, { Circle, Marker, Polyline } from 'react-native-maps';
 import { usePairedAppContext } from '../contexts/AppContext';
 import { useTracking } from '../context/TrackingContext';
@@ -21,6 +27,8 @@ import {
   watchLiveRequests,
   requestLiveLocation,
   respondLiveLocation,
+  renewMapView,
+  endMapView,
 } from '../services/locationService';
 import { watchProfile } from '../services/profileService';
 import { watchGeofences } from '../services/geofenceService';
@@ -28,6 +36,7 @@ import { requestForegroundLocationPermission } from '../services/permissionServi
 import { locationAgeLabel } from '../features/location/policy';
 import { allowTracking } from '../features/location/trackingEngine';
 import { haversineDistanceKm } from '../utils/haversine';
+import { formatSharedDistance } from '../features/location/distanceLabel';
 
 const coordinate = (point) => ({ latitude: point.lat, longitude: point.lng });
 export default function MapScreen({ navigation }) {
@@ -44,10 +53,28 @@ export default function MapScreen({ navigation }) {
   const [profile, setProfile] = useState(null);
   const [now, setNow] = useState(() => Date.now());
   const [history, setHistory] = useState(null);
+  const historyRevision = useRef(0);
+  const partnerPrecision = useRef(null);
   const [busy, setBusy] = useState(false);
+  const optionsSheet = useRef(null);
+  const [partnerExpanded, setPartnerExpanded] = useState(false);
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
   const [follow, setFollow] = useState(true);
+  const focused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  const [viewing, setViewing] = useState({ status: 'connecting' });
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', value => setAppActive(value === 'active'));
+    return () => subscription.remove();
+  }, []);
+  useEffect(() => {
+    if (!focused || !appActive) return undefined;
+    const id = Crypto.randomUUID();
+    return startMapViewing({
+      renew: () => renewMapView(id), close: () => endMapView(id), onState: setViewing,
+    });
+  }, [focused, appActive, couple.id]);
   useEffect(() => {
     const stopPlaces = watchGeofences(couple.id, userId, {
       onData: setPlaces,
@@ -62,29 +89,40 @@ export default function MapScreen({ navigation }) {
       onError: setError,
     });
     const stopPartner = watchUserLocation(couple.id, partnerId, {
-      onData: setPartner,
+      onData: value => {
+        setPartner(value);
+        const precision = !value ? 'off' : value.accuracy >= 1000 ? 'approximate' : 'precise';
+        if (precision !== partnerPrecision.current) {
+          partnerPrecision.current = precision;
+          historyRevision.current += 1;
+          setHistory(null);
+        }
+      },
       onError: setError,
     });
     const stopProfile = watchProfile(partnerId, {
       onData: setProfile,
       onError: setError,
     });
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
     return () => {
       stopPlaces();
       stopRequests();
       stopMine();
       stopPartner();
       stopProfile();
-      clearInterval(timer);
     };
   }, [couple.id, partnerId, userId]);
+  useEffect(() => {
+    if (!focused || !appActive) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [focused, appActive]);
   useEffect(() => {
     if (!ready || !follow) return;
     const points = [mine, partner].filter(Boolean).map(coordinate);
     if (points.length === 2)
       map.current?.fitToCoordinates(points, {
-        edgePadding: { top: 60, bottom: 60, left: 60, right: 60 },
+        edgePadding: { top: partnerExpanded ? 210 : 75, bottom: 100, left: 60, right: 60 },
         animated: true,
       });
     else if (points.length === 1)
@@ -93,7 +131,7 @@ export default function MapScreen({ navigation }) {
         latitudeDelta: 0.015,
         longitudeDelta: 0.015,
       });
-  }, [mine, partner, ready, follow]);
+  }, [mine, partner, ready, follow, partnerExpanded]);
   async function run(action) {
     setBusy(true);
     setError(null);
@@ -129,6 +167,39 @@ export default function MapScreen({ navigation }) {
     mine && partner
       ? haversineDistanceKm(mine.lat, mine.lng, partner.lat, partner.lng)
       : null;
+  const shownPartner = viewing.status === 'requested' ? estimatePosition(partner, now) : partner;
+  const partnerDetails = partner ? [
+    locationAgeLabel(partner.updatedAt, now),
+    [
+      Number.isFinite(partner.batteryLevel) ? `${partner.batteryLevel} %${partner.charging ? ' · Cargando' : ''}` : 'Batería no compartida',
+      { stationary: 'En reposo', walking: 'A pie', cycling: 'En bicicleta', driving: 'En vehículo' }[partner.activity],
+      Number.isFinite(partner.speed) && partner.speed >= 0 ? `${Math.round(partner.speed * 3.6)} km/h` : null,
+    ].filter(Boolean).join(' · '),
+    [
+      Number.isFinite(shownPartner?.accuracy) ? `±${Math.round(shownPartner.accuracy)} m` : null,
+      shownPartner?.estimated ? 'Posición estimada' : null,
+      partner.activityConfidence === 'low' && partner.activity !== 'unknown' ? 'Actividad estimada' : null,
+    ].filter(Boolean).join(' · '),
+    distance !== null ? `${fresh ? 'Distancia' : 'Última distancia'}: ${formatSharedDistance(distance, mine, partner)}` : null,
+    (profile?.status?.text || profile?.status?.emoji) && Date.parse(profile.status.expiresAt) > now
+      ? `${profile.status.emoji ?? ''} ${profile.status.text}` : null,
+  ].filter(Boolean) : [];
+  const compactDetails = partner ? [
+    locationAgeLabel(partner.updatedAt, now),
+    Number.isFinite(partner.batteryLevel) ? `Batería ${partner.batteryLevel} %${partner.charging ? ' · Cargando' : ''}` : null,
+    { stationary: 'En reposo', walking: 'A pie', cycling: 'En bicicleta', driving: 'En vehículo' }[partner.activity],
+    Number.isFinite(partner.speed) && partner.speed >= 0 ? `${Math.round(partner.speed * 3.6)} km/h` : null,
+    ...partnerDetails.slice(2),
+  ].filter(Boolean) : [];
+  const compactInfo = compactDetails[Math.floor(now / 5000) % Math.max(1, compactDetails.length)] ?? '';
+  const partnerSummary = [
+    profile?.name ?? 'Tu pareja',
+    shownPartner?.estimated ? 'Estimación' : null,
+    partner && now - Date.parse(partner.updatedAt) >= 120000 ? 'Ubicación antigua' : null,
+    compactInfo,
+  ].filter(Boolean).join(' · ');
+
+
   return (
     <View style={styles.container}>
       <View style={styles.mapContainer}>
@@ -164,20 +235,36 @@ export default function MapScreen({ navigation }) {
             {[
               { point: mine, title: 'Tú', color: '#D6336C' },
               {
-                point: partner,
+                point: shownPartner,
                 title: profile?.name ?? 'Tu pareja',
                 color: '#4263EB',
+                details: partnerDetails,
               },
             ].map(
-              ({ point, title, color }) =>
+              ({ point, title, color, details }) =>
                 point && (
                   <React.Fragment key={title}>
                     <Marker
                       coordinate={coordinate(point)}
-                      title={title}
-                      description={locationAgeLabel(point.updatedAt, now)}
+                      title={details ? undefined : title}
+                      description={details ? undefined : locationAgeLabel(point.updatedAt, now)}
                       pinColor={color}
-                    />
+                      onPress={details ? () => setPartnerExpanded(value => !value) : undefined}
+                      accessibilityLabel={details ? `${partnerSummary}. ${partnerExpanded ? 'Ocultar' : 'Mostrar'} detalles` : title}
+                      anchor={details ? { x: 0.5, y: 1 } : undefined}
+                    >
+                      {details && <View style={styles.partnerMarker} collapsable={false}>
+                        <View style={styles.markerCard}>
+                          {partnerExpanded ? <>
+                            <Text style={styles.markerTitle} numberOfLines={1}>{title}</Text>
+                            {details.map((line, index) => <Text key={index} style={styles.markerDetail} numberOfLines={2}>{line}</Text>)}
+                          </> : <Text style={styles.markerSummary} numberOfLines={1}>{partnerSummary}</Text>}
+
+                        </View>
+                        <View style={styles.markerStem} />
+                        <View style={styles.markerDot} />
+                      </View>}
+                    </Marker>
                     {point.accuracy > 0 && (
                       <Circle
                         center={coordinate(point)}
@@ -189,21 +276,54 @@ export default function MapScreen({ navigation }) {
                   </React.Fragment>
                 ),
             )}
-            {history?.length > 1 && (
+            {history?.length > 1 && !history.some(point => point.approximate) && (
               <Polyline
                 coordinates={history.map(coordinate)}
                 strokeColor="#4263EB"
                 strokeWidth={3}
               />
             )}
+            {history?.filter(point => point.approximate).map(point => <Circle key={point.id}
+              center={coordinate(point)} radius={point.accuracy_m ?? 2000}
+              strokeColor="#4263EB" fillColor="#4263EB10" />)}
           </MapView>
         ) : (
-          <View style={{ padding: 24 }}>
-            <Text>
-              El mapa no está disponible en esta instalación. Puedes consultar
-              los datos de ubicación en la ficha.
-            </Text>
-          </View>
+          <OpenMap
+            onMarkerPress={id => { if (id === partnerId) setPartnerExpanded(value => !value); }}
+            ref={map}
+            style={styles.map}
+            onMapReady={() => setReady(true)}
+            onPanDrag={() => setFollow(false)}
+            points={[
+              ...places.map((p) => ({
+                ...p,
+                title: p.name,
+                color: '#176647',
+                radius: p.radiusMeters,
+              })),
+              ...[
+                { point: mine, title: 'Tú', color: '#A62450' },
+                {
+                  point: shownPartner,
+                  title: profile?.name ?? 'Tu pareja',
+                  color: '#4263EB',
+                  details: partnerDetails,
+                },
+              ]
+                .filter((p) => p.point)
+                .map(({ point, title, color, details }) => ({
+                  ...point,
+                  title: point.estimated ? `${title} · Posición estimada` : title,
+                  color,
+                  radius: point.accuracy,
+                  details,
+                  id: details ? partnerId : undefined,
+                  expanded: details ? partnerExpanded : undefined,
+                  summary: details ? partnerSummary : undefined,
+                })),
+            ]}
+            history={history ?? []}
+          />
         )}
         <TouchableOpacity
           accessibilityRole="button"
@@ -213,45 +333,36 @@ export default function MapScreen({ navigation }) {
           <Text>{follow ? 'Explorar mapa' : 'Centrar ubicaciones'}</Text>
         </TouchableOpacity>
       </View>
-      <ScrollView
-        style={styles.panel}
-        contentContainerStyle={{ padding: 16, gap: 10 }}
-      >
-        <View style={styles.row}>
-          {!!profile?.avatarUrl && (
-            <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
-          )}
-          <View>
-            <Text style={styles.title}>{profile?.name ?? 'Tu pareja'}</Text>
-            <Text>
-              {partner
-                ? locationAgeLabel(partner.updatedAt, now)
-                : 'Sin ubicación compartida disponible'}
-            </Text>
-          </View>
+      <MapOptionsSheet ref={optionsSheet} renderCompact={() => (
+      <View style={styles.toolbar}>
+        <View style={styles.flex}>
+          {!partner && <Text style={styles.muted}>Tu pareja aún no comparte ubicación</Text>}
+          <Text style={styles.toolbarTitle}>Tu ubicación · {mode === 'off' ? 'Pausada' : mode === 'live' ? 'En vivo' : 'Bajo consumo'}</Text>
+          {mode !== 'off' && Date.parse(tracking.autoLiveUntil) > now &&
+            <Text style={styles.muted}>Tu pareja está mirando el mapa</Text>}
+          {requests.some(item => item.target_id === userId && item.status === 'pending' && Date.parse(item.expires_at) > now) &&
+            <Text style={styles.muted}>Solicitud pendiente · Desliza hacia arriba</Text>}
         </View>
-        {partner && (
-          <Text>
-            Precisión aproximada: ±{Math.round(partner.accuracy ?? 0)} m
-            {partner.speed >= 0 && partner.speed != null
-              ? ` · ${(partner.speed * 3.6).toFixed(0)} km/h`
-              : ''}
-          </Text>
-        )}
-        {!!profile?.status?.text &&
-          Date.parse(profile.status.updatedAt) > now - 86400_000 && (
-            <Text>
-              {profile.status.emoji} {profile.status.text}
-            </Text>
-          )}
-        {distance !== null && (
-          <Text>
-            {fresh ? 'Distancia' : 'Distancia entre las últimas posiciones'}:{' '}
-            {distance < 1
-              ? `${Math.round(distance * 1000)} m`
-              : `${distance.toFixed(1)} km`}
-          </Text>
-        )}
+        <TouchableOpacity accessibilityRole="button" disabled={busy}
+          accessibilityLabel={mode === 'off' ? 'Compartir mi ubicación' : 'Pausar mi ubicación'}
+          style={styles.quickButton} onPress={() => run(() => enable(mode === 'off' ? 'balanced' : 'off'))}>
+          {busy ? <ActivityIndicator color={colors.primary} /> :
+            <Text style={styles.linkText}>{mode === 'off' ? 'Compartir' : 'Pausar'}</Text>}
+        </TouchableOpacity>
+      </View>
+      )}>
+      <View style={{ padding: 16, paddingBottom: 32, gap: 10 }}>
+
+        <Text accessibilityLiveRegion="polite" style={styles.muted}>
+          {{
+            connecting: 'Solicitando actualización al otro móvil…',
+            requested: 'Sesión automática solicitada. La hora de la posición indica si el otro móvil ya está respondiendo.',
+            consent_required: 'Tu pareja puede autorizar las sesiones automáticas en Ajustes → Ubicación y privacidad.',
+            paused: 'Tu pareja tiene la ubicación pausada. Abrir el mapa no la reactiva.',
+            expired: 'La sesión automática ha terminado tras 15 minutos. Sal del mapa y vuelve a entrar para solicitar otra.',
+            offline: 'No se pudo solicitar la sesión automática. Se reintentará mientras el mapa esté abierto.',
+          }[viewing.status]}
+        </Text>
         <TouchableOpacity
           disabled={busy}
           onPress={() => run(requestLiveLocation)}
@@ -308,7 +419,9 @@ export default function MapScreen({ navigation }) {
           ))}
         <Text style={styles.title}>
           Tu ubicación ·{' '}
-          {mode === 'off'
+          {mode !== 'off' && Date.parse(tracking.autoLiveUntil) > now
+            ? 'Tu pareja está mirando el mapa'
+            : mode === 'off'
             ? 'Pausada'
             : mode === 'live'
               ? 'Sesión en vivo'
@@ -338,6 +451,11 @@ export default function MapScreen({ navigation }) {
             }[tracking.status]
           }
         </Text>
+        <Text style={styles.muted}>
+          {mode === 'live'
+            ? 'La sesión solicita más precisión durante 15 minutos. El ahorro de batería puede reducir la frecuencia.'
+            : 'Bajo consumo usa la ubicación del sistema y espacia las actualizaciones. La posición puede tardar varios minutos en cambiar.'}
+        </Text>
         {mine && (
           <Text>
             Tu última publicación: {locationAgeLabel(mine.updatedAt, now)}
@@ -357,28 +475,35 @@ export default function MapScreen({ navigation }) {
             <TouchableOpacity
               key={value}
               accessibilityRole="button"
-              disabled={busy}
-              style={styles.button}
+              disabled={busy || value === mode}
+              accessibilityState={{
+                selected: value === mode,
+                disabled: busy || value === mode,
+              }}
+              style={[styles.button, value === mode && { opacity: 0.5 }]}
               onPress={() => run(() => enable(value))}
             >
-              <Text style={styles.buttonText}>{label}</Text>
+              <Text style={styles.buttonText}>
+                {value === mode ? label + ' ✓' : label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
-        <TouchableOpacity onPress={() => navigation.navigate('Ajustes')}>
+        <TouchableOpacity onPress={() => { optionsSheet.current?.close(); navigation.navigate('Ajustes'); }}>
           <Text style={styles.link}>Ajustes de ubicación y privacidad</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('Lugares')}>
+        <TouchableOpacity onPress={() => { optionsSheet.current?.close(); navigation.navigate('Lugares'); }}>
           <Text style={styles.link}>Mis lugares y avisos de llegada</Text>
         </TouchableOpacity>
         <TouchableOpacity
           disabled={busy}
           onPress={() =>
-            run(async () =>
-              setHistory(
-                history ? null : await getLocationHistory(couple.id, partnerId),
-              ),
-            )
+            run(async () => {
+              if (history) { setHistory(null); return; }
+              const revision = historyRevision.current;
+              const points = await getLocationHistory(couple.id, partnerId);
+              if (revision === historyRevision.current) setHistory(points);
+            })
           }
         >
           <Text style={styles.link}>
@@ -389,7 +514,7 @@ export default function MapScreen({ navigation }) {
         {history && (
           <Text>
             {history.length
-              ? `${history.length} puntos. Muestreo aproximado cada 15 minutos.`
+              ? `${history.length} ${history.some(point => point.approximate) ? 'zonas aproximadas; no representan un recorrido exacto' : 'puntos. Muestreo cada 15 minutos'}.`
               : 'No hay historial compartido en las últimas 24 horas.'}
           </Text>
         )}
@@ -413,28 +538,44 @@ export default function MapScreen({ navigation }) {
           <Text style={styles.link}>Borrar mi historial</Text>
         </TouchableOpacity>
         {busy && <ActivityIndicator color="#D6336C" />}
-      </ScrollView>
+      </View>
+      </MapOptionsSheet>
     </View>
   );
 }
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFF8FA' },
-  mapContainer: { flex: 1, minHeight: 200 },
-  map: { ...StyleSheet.absoluteFillObject },
-  panel: { flex: 1 },
+  mapContainer: { flex: 1 },
+  map: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  partnerMarker: { width: 224, alignItems: 'center' },
+  markerCard: { width: 220, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: '#4263EB', padding: 10 },
+  markerSummary: { fontSize: 12, color: colors.text },
+  markerTitle: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 3 },
+  markerDetail: { fontSize: 12, lineHeight: 16, color: colors.muted },
+  markerStem: { width: 2, height: 8, backgroundColor: '#4263EB' },
+  markerDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, borderColor: '#fff', backgroundColor: '#4263EB' },
+  toolbar: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12,
+    paddingVertical: 6, backgroundColor: colors.surface },
+  toolbarTitle: { color: colors.text, fontSize: 13, fontWeight: '600' },
+  quickButton: { minHeight: 48, minWidth: 48, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  linkText: { color: colors.primary, fontWeight: '600' },
   title: { fontSize: 17, fontWeight: '700', color: '#8A2846' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   flex: { flex: 1 },
-  button: { backgroundColor: '#D6336C', borderRadius: 12, padding: 11 },
+  button: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    padding: 13,
+    minHeight: 48,
+  },
   buttonText: { color: '#fff', fontWeight: '600' },
   muted: { color: '#666', fontSize: 12 },
   error: { color: '#B42318' },
   link: { color: '#8A2846', paddingVertical: 8 },
-  avatar: { width: 44, height: 44, borderRadius: 22 },
   recenter: {
     position: 'absolute',
     right: 12,
-    top: 12,
+    bottom: 125,
     backgroundColor: '#fff',
     borderRadius: 12,
     padding: 12,

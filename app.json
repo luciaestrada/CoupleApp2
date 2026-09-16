@@ -11,8 +11,10 @@
       "infoPlist": {
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrar la distancia con tu pareja y avisar cuando llegas a un lugar guardado.",
         "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para calcular la distancia con tu pareja.",
+        "NSMotionUsageDescription": "Los sensores ayudan a detectar movimiento y ajustar las consultas de ubicación.",
         "UIBackgroundModes": [
-          "location"
+          "location",
+          "remote-notification"
         ],
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -38,7 +40,7 @@
           "microphonePermission": false
         }
       ],
-      "expo-notifications",
+      ["expo-notifications", { "enableBackgroundRemoteNotifications": true }],
       "expo-sqlite",
       "expo-status-bar"
     ],

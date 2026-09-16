@@ -32,6 +32,8 @@ export function watchPushStatus(listener) {
 let registration;
 let pendingResponse = null;
 const routes = new Set([
+  'Inicio',
+  'Preguntas',
   'Chat',
   'Mapa',
   'Fechas',
@@ -41,6 +43,8 @@ const routes = new Set([
 ]);
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
+    if (notification.request.content.data?.type === 'tracking_control')
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
     const route = navigationRef.isReady()
       ? navigationRef.getCurrentRoute()?.name
       : null;
@@ -77,6 +81,12 @@ export async function registerForPushNotifications({
         ['chat', 'Mensajes'],
         ['love', 'Amor'],
         ['geofence', 'Llegadas'],
+        ['exit', 'Salidas'],
+        ['walking', 'Caminar'],
+        ['cycling', 'Bicicleta'],
+        ['driving', 'Vehículo'],
+        ['stationary', 'En reposo'],
+        ['trip', 'Recorridos'],
         ['dates', 'Fechas'],
         ['stories', 'Historias'],
         ['status', 'Estados'],
@@ -261,6 +271,7 @@ export function watchNotifications(userId, handlers) {
         .from('notifications')
         .select('id,title,body,kind,read_at,created_at')
         .eq('user_id', userId)
+        .or('data->>type.is.null,data->>type.neq.tracking_control')
         .order('created_at', { ascending: false })
         .limit(100);
       if (error) throw error;

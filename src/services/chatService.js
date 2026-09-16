@@ -8,6 +8,8 @@ function normalizeMessage(message) {
     senderId: message.sender_id,
     text: message.text,
     loveTap: message.type === 'love',
+    type: message.type,
+    metadata: message.metadata ?? {},
     createdAt: message.created_at,
   };
 }
@@ -20,7 +22,7 @@ export function watchMessages(coupleId, handlers) {
     async load() {
       const { data, error } = await supabase
         .from('messages')
-        .select('id,sender_id,type,text,created_at')
+        .select('*')
         .eq('couple_id', coupleId)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -111,7 +113,7 @@ export async function sendMessage(coupleId, text) {
 export async function loadOlderMessages(coupleId, cursor) {
   const { data, error } = await supabase
     .from('messages')
-    .select('id,sender_id,type,text,created_at')
+    .select('*')
     .eq('couple_id', coupleId)
     .or(
       `created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`,

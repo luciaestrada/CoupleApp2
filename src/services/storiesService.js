@@ -63,6 +63,8 @@ async function withSignedUrls(stories) {
     imageUrl: signedCache.get(story.image_path)?.url,
     createdAt: story.created_at,
     expiresAt: story.expires_at,
+    mediaType: story.media_type ?? 'image',
+    caption: story.caption ?? '',
   }));
 }
 
@@ -95,7 +97,7 @@ export function watchActiveStories(coupleId, handlers) {
     async load() {
       const { data, error } = await supabase
         .from('stories')
-        .select('id,author_id,image_path,created_at,expires_at')
+        .select('*')
         .eq('couple_id', coupleId)
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
@@ -113,30 +115,36 @@ export function watchActiveStories(coupleId, handlers) {
   };
 }
 
-export async function uploadStory(coupleId, userId, asset) {
-  resolveImageType(asset);
-  const resized = await ImageManipulator.manipulateAsync(
-    asset.uri,
-    asset.width > 1600 ? [{ resize: { width: 1600 } }] : [],
-    { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG },
-  );
-  const contentType = 'image/jpeg';
-  const extension = 'jpg';
+export async function uploadStory(coupleId, userId, asset, caption = '') {
+  const video = asset.type === 'video';
+  if (caption.length > 1000) throw new Error('El texto no puede superar 1000 caracteres.');
+  if (video && (!Number.isFinite(asset.duration) || asset.duration > 60000))
+    throw new Error('Elige un vídeo de hasta 60 segundos.');
+  const mime = asset.mimeType ?? (asset.fileName?.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+  if (video && !['video/mp4','video/quicktime'].includes(mime)) throw new Error('Usa un vídeo MP4 o MOV.');
+  if (!video) resolveImageType(asset);
+  const resized = video ? asset : await ImageManipulator.manipulateAsync(
+    asset.uri, asset.width > 1600 ? [{ resize: { width: 1600 } }] : [],
+    { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG });
+  const contentType = video ? mime : 'image/jpeg';
+  const extension = video ? (mime === 'video/quicktime' ? 'mov' : 'mp4') : 'jpg';
 
   const imagePath = `${coupleId}/${userId}/${Date.now()}.${extension}`;
   const response = await fetch(resized.uri);
-  if (!response.ok) throw new Error('No se pudo leer la imagen seleccionada.');
+  if (!response.ok) throw new Error('No se pudo leer el archivo seleccionado.');
   const arrayBuffer = await response.arrayBuffer();
-  if (arrayBuffer.byteLength > 10 * 1024 * 1024)
-    throw new Error('La foto supera el límite de 10 MiB.');
+  if (arrayBuffer.byteLength > (video ? 50 : 10) * 1024 * 1024)
+    throw new Error(video ? 'El vídeo supera el límite de 50 MiB.' : 'La foto supera el límite de 10 MiB.');
 
   const { error: uploadError } = await supabase.storage
     .from('stories')
     .upload(imagePath, arrayBuffer, { contentType, upsert: false });
   if (uploadError) throw uploadError;
 
-  const { error: insertError } = await supabase.rpc('create_story', {
+  const { error: insertError } = await supabase.rpc('create_story_v2', {
     p_image_path: imagePath,
+    p_media_type: video ? 'video' : 'image',
+    p_caption: caption.trim(),
   });
   if (insertError) {
     const { error: rollbackError } = await supabase.storage
