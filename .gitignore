@@ -2,7 +2,6 @@ node_modules/
 .npm-cache/
 .expo/
 .expo-export-*/
-.env
 
 npm-debug.log*
 
@@ -14,3 +13,7 @@ credentials.json
 *.p12
 *.mobileprovision
 *.jks
+
+# Generated native module outputs
+modules/**/android/.gradle/
+modules/**/android/build/

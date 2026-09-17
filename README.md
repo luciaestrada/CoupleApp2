@@ -33,7 +33,7 @@ Consulta el documento de implementación para el comportamiento y las comprobaci
 ## Puesta en marcha
 
 1. Instala dependencias con `npm ci`.
-2. Copia `.env.example` a `.env` y configura la URL y la clave publicable de Supabase.
+2. El `.env` incluido contiene la URL y la clave pública del backend actual. Para usar otra instancia, actualiza esas variables; `.env.example` sirve de referencia. No añadas secretos privados a este archivo versionado.
 3. Para una instancia vacía, ejecuta [`supabase/setup.sql`](supabase/setup.sql). Si ya hay datos, aplica las migraciones pendientes siguiendo [`docs/IMPLEMENTACION_ESTADO.md`](docs/IMPLEMENTACION_ESTADO.md).
 4. Despliega `push` y `maintenance`, configura el scheduler y las credenciales móviles siguiendo ese mismo documento.
 5. Ejecuta `npm run doctor`, `npm run verify`, `npm test`, `npm run typecheck`, `npm run lint`
