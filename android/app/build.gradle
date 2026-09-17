@@ -181,7 +181,7 @@ dependencies {
     }
 }
 
-// EAS file environment variable or a local, ignored configuration file.
+// Optional EAS file override for the versioned public Firebase client configuration.
 def googleServicesSource = System.getenv('GOOGLE_SERVICES_JSON')
 if (googleServicesSource) {
     if (!file(googleServicesSource).exists()) throw new GradleException('GOOGLE_SERVICES_JSON does not exist')

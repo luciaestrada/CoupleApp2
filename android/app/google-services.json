@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "21190279119",
+    "project_id": "coupleapp-f57c9",
+    "storage_bucket": "coupleapp-f57c9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:21190279119:android:f9765326a7355e9ff55cba",
+        "android_client_info": {
+          "package_name": "com.esc.coupleapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWVPoPMJmWCwfEiS0O7AcWJY3rXwGB--0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

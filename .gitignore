@@ -8,4 +8,9 @@ npm-debug.log*
 
 .deno-cache/
 
-android/app/google-services.json
+# Private signing credentials (managed outside Git)
+credentials.json
+*.p8
+*.p12
+*.mobileprovision
+*.jks

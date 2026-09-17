@@ -29,7 +29,7 @@ Validación local: 24 pruebas de SQL, permisos, sesiones, muestreo y registro co
 - Los fallos de registro push se muestran en Ajustes, con un botón para comprobar/reintentar y sin el texto técnico de Firebase sobre la pantalla inicial. Los errores de configuración tienen una espera de cinco minutos entre reintentos automáticos.
 - Se corrigió el bloque JSX fuera de `MapScreen` y se añadió una prueba de sintaxis para todas las pantallas.
 
-**Configuración Android actualizada:** `android/app/google-services.json` ya está presente y corresponde a `com.esc.coupleapp`. El identificador Android, el namespace y las clases nativas se han actualizado para coincidir. El archivo sigue excluido de Git. La credencial de envío FCM v1 se administra en EAS; la entrega real debe verificarse tras instalar el nuevo APK. Una recarga de JavaScript no actualiza la configuración nativa. Consultar [configuración oficial de FCM con Expo](https://docs.expo.dev/push-notifications/fcm-credentials/). Maps Android sigue requiriendo `GOOGLE_MAPS_ANDROID_API_KEY`.
+**Configuración Android actualizada:** `android/app/google-services.json` ya está presente y corresponde a `com.esc.coupleapp`. El identificador Android, el namespace y las clases nativas se han actualizado para coincidir. El archivo de configuración pública de Firebase se incluye en Git; las claves privadas de envío FCM y de firma permanecen fuera del repositorio. La credencial de envío FCM v1 se administra en EAS; la entrega real debe verificarse tras instalar el nuevo APK. Una recarga de JavaScript no actualiza la configuración nativa. Consultar [configuración oficial de FCM con Expo](https://docs.expo.dev/push-notifications/fcm-credentials/). Maps Android sigue requiriendo `GOOGLE_MAPS_ANDROID_API_KEY`.
 
 Actualización: 10 de septiembre de 2026. La ampliación está implementada y probada localmente. El SQL nuevo y el worker push actualizado todavía deben desplegarse en el servidor; no se ha verificado la entrega entre dos teléfonos con esta versión.
 
@@ -91,7 +91,7 @@ El estado de cada entrega se consulta en `notification_deliveries`; la tabla `no
 | --- | --- |
 | `EXPO_PUBLIC_SUPABASE_URL` y `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Entorno público del cliente, como antes. |
 | `GOOGLE_MAPS_ANDROID_API_KEY` | Clave de Maps SDK for Android, restringida al paquete y a los certificados de firma. Se incorpora al manifiesto Gradle y a la configuración Expo. |
-| `GOOGLE_SERVICES_JSON` | Ruta al archivo cliente FCM; puede ser una variable de tipo archivo en EAS. Gradle lo copia a `android/app/google-services.json`, que está ignorado por Git. |
+| `GOOGLE_SERVICES_JSON` | Ruta al archivo cliente FCM; puede ser una variable de tipo archivo en EAS. Gradle lo copia a `android/app/google-services.json`, incluido en Git como configuración pública del cliente. |
 | APNs y firma iOS | Configuración de credenciales del proyecto en EAS/Apple. |
 | Firma Android de producción | EAS o configuración Gradle externa. El release local ya no usa automáticamente el keystore debug. |
 
