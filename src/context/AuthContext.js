@@ -68,6 +68,10 @@ export function AuthProvider({ children }) {
         setSession(data.session);
       }
       setLoading(false);
+    }).catch((nextError) => {
+      if (!mounted) return;
+      setError(nextError);
+      setLoading(false);
     });
 
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
