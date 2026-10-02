@@ -323,15 +323,13 @@ if (
     'el seguimiento debe declarar un servicio Android de ubicación visible.',
   );
 }
-if (
-  !appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes(
-    'remote-notification',
-  )
-) {
-  fail(
-    'iOS debe declarar recepción en segundo plano para las solicitudes del mapa.',
-  );
-}
+if (!appConfig.expo.plugins.includes('expo-background-task') ||
+    !appConfig.expo.plugins.includes('./plugins/withLocalIosNotifications') ||
+    !appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes('location') ||
+    appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes('remote-notification'))
+  fail('iOS debe declarar ubicación y tareas de fondo sin depender de APNs.');
+requireText(readFileSync(join(root,'src/services/backgroundNotificationService.js'),'utf8'),
+  'syncTrackingConfig', 'La tarea de fondo iOS debe revalidar también las solicitudes del mapa.');
 requireText(readFileSync(join(root,'src/features/location/trackingWake.js'),'utf8'),
   'syncTrackingConfig', 'Los avisos de control deben revalidar la sesión en el servidor.');
 

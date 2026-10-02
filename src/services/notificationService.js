@@ -9,6 +9,8 @@ import {
 import { registerDevice } from './deviceService';
 import { navigationRef } from '../navigation/navigationService';
 import { watchQuery } from './realtimeService';
+import { syncLocalNotifications } from './localNotificationSync';
+import { configureBackgroundNotifications } from './backgroundNotificationService';
 
 let registered = null;
 let failedRegistration = null;
@@ -40,6 +42,7 @@ const routes = new Set([
   'Historias',
   'Estado',
   'Avisos',
+  'Planes',
 ]);
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -122,9 +125,24 @@ export async function registerForPushNotifications({
       Date.now() - registered.at < 6 * 3600_000
     )
       return {
-        status: permission.granted ? 'registered' : 'denied',
+        status: permission.granted ? (Platform.OS === 'ios' ? 'local' : 'registered') : 'denied',
         permission,
       };
+    // iOS uses the authenticated inbox and local notifications, without APNs.
+    if (Platform.OS === 'ios') {
+      await registerDevice(null);
+      await configureBackgroundNotifications(session.user.id);
+      localStorage.removeItem('coupleapp.pushToken');
+      registered = { userId: session.user.id, granted: permission.granted, at: Date.now() };
+      failedRegistration = null;
+      setPushStatus({
+        status: permission.granted ? 'local' : 'denied',
+        message: permission.granted
+          ? 'Avisos locales activados. Se consultan también en segundo plano cuando iOS lo permite. Los recordatorios de fechas y planes aparecen a las 09:00, hora de Madrid. La recepción de mensajes puede retrasarse.'
+          : 'Permite las notificaciones en Ajustes para mostrar los avisos locales.',
+      });
+      return { status: pushStatus.status, token: null, permission };
+    }
     let token = permission.granted
       ? localStorage.getItem('coupleapp.pushToken')
       : null;
@@ -212,7 +230,7 @@ export async function openNotification(id) {
   if (coupleError) throw coupleError;
   if (!couple || couple.id !== data.couple_id) return false;
   const screen = routes.has(data.data?.screen) ? data.data.screen : 'Avisos';
-  navigationRef.navigate(screen);
+  navigationRef.navigate(screen,screen==='Preguntas'?{questionId:data.data?.questionId??null}:undefined);
   const { error: readError } = await supabase.rpc('mark_notification_read', {
     p_id: id,
   });
@@ -230,7 +248,10 @@ export async function drainNotificationResponse() {
     pendingResponse = null;
     return;
   }
-  if (await openNotification(id)) {
+  const opened = response.notification.request.content.data?.type === 'local_reminder'
+    ? await openLocalReminder(response.notification.request.content.data)
+    : await openNotification(id);
+  if (opened) {
     localStorage.setItem(
       'coupleapp.lastNotification',
       response.notification.request.identifier,
@@ -239,6 +260,20 @@ export async function drainNotificationResponse() {
     await Notifications.clearLastNotificationResponseAsync();
   }
 }
+async function openLocalReminder(data) {
+  if (!navigationRef.isReady() || !['Fechas', 'Planes'].includes(data.screen)) return false;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user.id !== data.userId) return false;
+  const { data: couple, error } = await supabase.rpc('get_my_couple');
+  if (error) throw error;
+  if (couple?.id !== data.coupleId || couple.members?.length !== 2) return false;
+  const result = await supabase.from(data.screen === 'Planes' ? 'couple_plans' : 'special_dates')
+    .select('id').eq('couple_id', couple.id).eq('id', data.entityId).maybeSingle();
+  if (result.error) throw result.error;
+  if (!result.data) return false;
+  navigationRef.navigate(data.screen);
+  return true;
+}
 export function startNotificationResponses(onError) {
   const receive = (response) => {
     pendingResponse = response;
@@ -246,7 +281,7 @@ export function startNotificationResponses(onError) {
   };
   const subscription =
     Notifications.addNotificationResponseReceivedListener(receive);
-  const tokens = Notifications.addPushTokenListener(() => {
+  const tokens = Platform.OS === 'ios' ? null : Notifications.addPushTokenListener(() => {
     void registerForPushNotifications({ force: true }).catch(onError);
   });
   let active = true;
@@ -258,8 +293,47 @@ export function startNotificationResponses(onError) {
   return () => {
     active = false;
     subscription.remove();
-    tokens.remove();
+    tokens?.remove();
   };
+}
+
+export function startLocalNotifications(userId, { onError = () => {} } = {}) {
+  if (Platform.OS !== 'ios' || !userId) return () => {};
+  let active = true;
+  const load = async () => {
+    await syncLocalNotifications({ userId,
+      isCurrent: () => active && AppState.currentState === 'active',
+      currentRoute: () => navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : null,
+    });
+    return null;
+  };
+  const stops = [
+    ['notifications', `user_id=eq.${userId}`],
+    ['user_settings', `user_id=eq.${userId}`],
+    ['special_dates', undefined], ['couple_plans', undefined], ['couple_members', `user_id=eq.${userId}`],
+  ].map(([table, filter]) => watchQuery({
+    channelName: `local-notifications-${table}-${userId}`, table, filter,
+    load, onData: () => {}, onError,
+  }));
+  // Foreground recovery. Background work is driven by native tasks, not timers.
+  let polling = false;
+  const timer = setInterval(async () => {
+    if (!active || polling || AppState.currentState !== 'active') return;
+    polling = true;
+    try { await load(); } catch (error) { onError(error); }
+    finally { polling = false; }
+  }, 30000);
+  return () => { active = false; clearInterval(timer); stops.forEach(stop => stop()); };
+}
+
+export async function testLocalNotification() {
+  const permission = await getNotificationPermission();
+  if (!permission.granted) throw new Error('Activa primero el permiso de notificaciones.');
+  await Notifications.scheduleNotificationAsync({
+    identifier: 'coupleapp-notification-test',
+    content: { title: 'CoupleApp', body: 'Las notificaciones locales funcionan en este dispositivo.', sound: 'default' },
+    trigger: null,
+  });
 }
 export function watchNotifications(userId, handlers) {
   return watchQuery({

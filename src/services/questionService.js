@@ -1,20 +1,21 @@
 import { supabase } from '../supabase/client';
 import { watchQuery } from './realtimeService';
 import { todayInMadrid } from '../utils/dateUtils';
-export async function loadQuestion(coupleId,day=todayInMadrid()) {
-  const {data:question,error}=await supabase.from('couple_daily_questions').select('*')
-    .eq('couple_id',coupleId).eq('local_day',day).maybeSingle();
+export async function loadQuestion(coupleId,day=todayInMadrid(),questionId=null) {
+  let query=supabase.from('couple_daily_questions').select('*').eq('couple_id',coupleId);
+  query=questionId?query.eq('id',questionId):query.eq('local_day',day);
+  const {data:question,error}=await query.maybeSingle();
   if(error) throw error;
-  if(!question) return {question:null,answers:[],preferences:await getQuestionPreferences()};
+  if(!question) return {question:null,answers:[],preferences:questionId?null:await getQuestionPreferences()};
   const {data:answers,error:answerError}=await supabase.from('question_answers').select('user_id,answer,version').eq('question_id',question.id);
   if(answerError) throw answerError;
   const {data:skips,error:skipError}=await supabase.from('question_skips').select('user_id').eq('question_id',question.id);
   if(skipError) throw skipError;
   return {question,answers,skipped:skips.length>0};
 }
-export function watchDailyQuestion(coupleId,day,handlers) {
-  return watchQuery({channelName:`daily-question-${coupleId}-${day}`,table:'couple_daily_questions',filter:`couple_id=eq.${coupleId}`,
-    load:()=>loadQuestion(coupleId,day),...handlers});
+export function watchDailyQuestion(coupleId,day,handlers,questionId=null) {
+  return watchQuery({channelName:`daily-question-${coupleId}-${questionId??day}`,table:'couple_daily_questions',filter:`couple_id=eq.${coupleId}`,
+    load:()=>loadQuestion(coupleId,day,questionId),...handlers});
 }
 export async function chooseDailyQuestion(category) {
   const {error}=await supabase.rpc('get_daily_question',{p_category:category});

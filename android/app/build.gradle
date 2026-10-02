@@ -81,6 +81,32 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+// CI can provide credentials through environment variables or Gradle properties.
+def signingValue = { String name, String localName ->
+    System.getenv(name) ?: findProperty(name) ?: keystoreProperties[localName]
+}
+def releaseStoreFile = signingValue('COUPLEAPP_UPLOAD_STORE_FILE', 'storeFile')
+def releaseStorePassword = signingValue('COUPLEAPP_UPLOAD_STORE_PASSWORD', 'storePassword')
+def releaseKeyAlias = signingValue('COUPLEAPP_UPLOAD_KEY_ALIAS', 'keyAlias')
+def releaseKeyPassword = signingValue('COUPLEAPP_UPLOAD_KEY_PASSWORD', 'keyPassword')
+def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
+
+// EAS injects its own signing configuration before invoking Gradle.
+gradle.taskGraph.whenReady { graph ->
+    if (graph.hasTask(':app:validateSigningRelease') && !android.signingConfigs.release.isSigningReady()) {
+        throw new GradleException('Release signing is missing. Configure android/keystore.properties (see docs/ANDROID_RELEASE.md).')
+    }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -105,20 +131,25 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (hasReleaseSigning) {
+                storeFile rootProject.file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Production signing is supplied by EAS or an external Gradle signing configuration.
-            // Never fall back to the development keystore for a release artifact.
-            def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
-            shrinkResources enableShrinkResources.toBoolean()
+            signingConfig signingConfigs.release
+            shrinkResources = (findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false').toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
-            crunchPngs enablePngCrunchInRelease.toBoolean()
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            crunchPngs = (findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true').toBoolean()
         }
     }
     packagingOptions {

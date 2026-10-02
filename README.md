@@ -50,9 +50,14 @@ miembro. Después aplica las migraciones pendientes de historial y ubicación/no
 
 ## Configuración móvil
 
+Para generar APK y AAB firmados, consulta [Android release](docs/ANDROID_RELEASE.md).
+Comandos locales: `npm run android:release:apk` y `npm run android:release:aab`.
+
 La ubicación se activa desde Mapa, con un modo cotidiano de bajo consumo y sesiones en vivo de 15 minutos. El segundo plano se habilita por separado y requiere permisos permanentes y un build nativo. Las posiciones muestran su fecha de captura y precisión; el sistema operativo puede retrasar o detener el seguimiento.
 
-En Android configura `GOOGLE_MAPS_ANDROID_API_KEY` y el archivo FCM mediante `GOOGLE_SERVICES_JSON`. Las credenciales push de Google/Apple y los workers deben estar activos para recibir avisos.
+En Android configura `GOOGLE_MAPS_ANDROID_API_KEY` y el archivo FCM mediante `GOOGLE_SERVICES_JSON`. Las credenciales push de Google y el worker deben estar activos para recibir avisos remotos en Android.
+
+En iOS se utilizan avisos locales sin APNs, sincronizados con Supabase en primer plano, mediante tareas periódicas de fondo y durante actualizaciones reales de ubicación. iOS controla las oportunidades de ejecución: los mensajes pueden retrasarse y las tareas se detienen si cierras la app deslizando. Las fechas especiales y los planes se programan como recordatorios locales a las 09:00, hora de Madrid. Consulta la [revisión y comprobación en iPhone](docs/IOS_NOTIFICATIONS.md). En Ajustes → Notificaciones puedes activar permisos y enviar un aviso local de prueba. La nueva dependencia y configuración requieren una nueva compilación iOS.
 
 Los permisos no se solicitan al arrancar. Se activan desde la función correspondiente o desde el
 panel de `Cuenta`, que distingue una denegación recuperable de un permiso bloqueado y, en este

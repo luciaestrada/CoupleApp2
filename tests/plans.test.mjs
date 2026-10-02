@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {createDatabase,installDatabase} from './support/database.mjs';
+
+test('planes: versiones, reintentos, recuerdo único y privacidad',async()=>{
+  const db=await createDatabase();
+  try {
+    await installDatabase(db);
+    const a=randomUUID(),b=randomUUID(),outsider=randomUUID(),id=randomUUID();
+    const as=async user=>{await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[user]);await db.exec('set role authenticated');};
+    const value=async(sql,args=[]) => (await db.query(sql,args)).rows[0].v;
+    for(const user of [a,b,outsider]) await db.query('insert into auth.users values($1,$2,$3)',[user,user+'@test.invalid','{}']);
+    await as(a);const couple=await value('select public.create_couple(current_date) v');
+    await as(b);await db.query('select public.join_couple($1)',[couple.inviteCode??couple.invite_code]);
+    const c=await value('select public.current_couple_id() v');
+    const save='select to_jsonb(public.save_couple_plan($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)) v';
+    const args=[id,c,a,0,'Paseo por el parque','Aire libre','Llevar una merienda','https://example.org','2026-09-25','pending'];
+    await as(a);
+    const first=await value(save,args);
+    assert.equal(first.version,1);
+    assert.equal((await value(save,args)).version,1);
+    await assert.rejects(db.query(save,[...args.slice(0,7),'javascript:alert(1)',...args.slice(8)]),/no válido/);
+    await as(b);
+    const update=[...args];update[2]=b;update[3]=1;update[6]='Llevar agua también';
+    const edited=await value(save,update);
+    assert.equal(edited.version,2);
+    await as(a);
+    const stale=[...args];stale[3]=1;stale[4]='Título con una versión antigua';
+    await assert.rejects(db.query(save,stale),/Actualiza/);
+    const remember='select to_jsonb(public.remember_couple_plan($1,$2,$3,$4,$5)) v';
+    await assert.rejects(db.query(remember,[id,2,'2026-09-25',c,a]),/Completa/);
+    const complete=[...update];complete[2]=a;complete[3]=2;complete[9]='completed';
+    const done=await value(save,complete);
+    assert.equal(done.version,3);
+    const memory=await value(remember,[id,3,'2026-09-25',c,a]);
+    await as(b);
+    assert.equal((await value(save,[...complete.slice(0,2),b,...complete.slice(3)])).version,3);
+    assert.equal((await value(remember,[id,3,'2026-09-25',c,b])).id,memory.id);
+    assert.equal(await value('select count(*)::int v from public.memory_entries'),1);
+    const reopen=[...complete];reopen[2]=b;reopen[3]=3;reopen[9]='pending';
+    await value(save,reopen);
+    assert.equal(await value('select count(*)::int v from public.memory_entries'),1);
+    await assert.rejects(db.query('update public.couple_plans set title=$1 where id=$2',['Directa',id]),/permission denied/);
+    await as(outsider);
+    assert.equal(await value('select count(*)::int v from public.couple_plans'),0);
+    assert.equal(await value('select count(*)::int v from public.memory_entries'),0);
+    await assert.rejects(db.query(remember,[id,3,'2026-09-25',c,outsider]),/no disponible/);
+    await as(b);
+    await assert.rejects(db.query(save,args),/no disponible/);
+    await db.exec('reset role');await db.query('delete from public.couple_plans where id=$1',[id]);
+    assert.equal(await value('select source_plan_id v from public.memory_entries'),null);
+  } finally {await db.close();}
+});

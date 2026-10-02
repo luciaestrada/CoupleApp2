@@ -135,17 +135,20 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   let lowPowerMode = false;
   let backgroundGranted = false;
   let activityRunning = false;
+  let nativeRunning = false;
+  let nativeStops = 0;
+  let backgroundTask;
   const sent = [];
   const Location = {
     Accuracy: { High: 6, Balanced: 3 },
     LocationActivityType: { Other: 1 },
     getLastKnownPositionAsync: async () => null,
-    hasStartedLocationUpdatesAsync: async () => false,
-    stopLocationUpdatesAsync: async () => {},
+    hasStartedLocationUpdatesAsync: async () => nativeRunning,
+    stopLocationUpdatesAsync: async () => { nativeRunning = false; nativeStops++; },
     getForegroundPermissionsAsync: async () => ({ granted: true }),
     hasServicesEnabledAsync: async () => true,
     getBackgroundPermissionsAsync: async () => ({ granted: backgroundGranted }),
-    startLocationUpdatesAsync: async (_task, options) => { requestedOptions = options; },
+    startLocationUpdatesAsync: async (_task, options) => { requestedOptions = options; nativeRunning = true; },
     watchPositionAsync: async (options, callback) => {
       requestedOptions = options;
       watchers++;
@@ -173,7 +176,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   };
   globalThis.__trackingTest = {
     Location,
-    TaskManager: { isTaskDefined: () => false, defineTask: () => {} },
+    TaskManager: { isTaskDefined: () => false, defineTask: (_name, task) => { backgroundTask = task; } },
     Battery: { getPowerStateAsync: async () => ({ batteryLevel: 1, lowPowerMode }) },
     Crypto: { randomUUID },
     AppState: { currentState: 'active' },
@@ -184,6 +187,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     shouldPublish,
     startActivityTracking: async()=>{ activityRunning = true; },
     stopActivityTracking:async()=>{ activityRunning = false; }, readActivity:async()=>null,
+    syncLocalNotifications: async () => {},
   };
   const source = (
     await readFile(
@@ -192,7 +196,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     )
   ).replace(/^import .*;\r?\n/gm, '');
   const engine = await import(
-    `data:text/javascript;base64,${Buffer.from('const {Location,TaskManager,Battery,Crypto,AppState,Platform,supabase,getDeviceId,effectiveMode,shouldPublish,startActivityTracking,stopActivityTracking,readActivity}=globalThis.__trackingTest;\n' + source).toString('base64')}`
+    `data:text/javascript;base64,${Buffer.from('const {Location,TaskManager,Battery,Crypto,AppState,Platform,supabase,getDeviceId,effectiveMode,shouldPublish,startActivityTracking,stopActivityTracking,readActivity,syncLocalNotifications}=globalThis.__trackingTest;\n' + source).toString('base64')}`
   );
   const config = {
     userId: 'user-a',
@@ -258,6 +262,55 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     await engine.configureTracking({ ...config, location_options: { low_battery_mode: 'off' } });
     assert.equal(activityRunning, false, 'La pausa por batería no deja sensores activos');
     assert.equal(storage.has('coupleapp.trackingPaused.user-a'), false, 'La pausa por batería no se convierte en una pausa voluntaria');
+
+    globalThis.__trackingTest.Platform.OS = 'android';
+    globalThis.__trackingTest.AppState.currentState = 'active';
+    lowPowerMode = false;
+    await engine.configureTracking(liveConfig);
+    assert.equal(nativeRunning, true, 'Android inicia el servicio mientras la app es visible, también en vivo');
+    assert.equal(watchers, 0);
+    assert.equal(requestedOptions.foregroundService.killServiceOnDestroy, false);
+    const stopsBeforeBackground = nativeStops;
+    globalThis.__trackingTest.AppState.currentState = 'background';
+    engine.suspendForegroundTracking();
+    await engine.configureTracking({ ...config, background_enabled: true });
+    assert.equal(nativeStops, stopsBeforeBackground, 'El cambio de vivo a equilibrado conserva el servicio');
+    assert.equal(requestedOptions.distanceInterval, 0, 'Recibe posiciones aunque el teléfono esté quieto');
+    assert.equal(requestedOptions.deferredUpdatesDistance, 0);
+    assert.equal(requestedOptions.deferredUpdatesInterval, 0, 'No retiene muestras esperando otro lote');
+    lowPowerMode = true;
+    await engine.configureTracking({ ...config, background_enabled: true });
+    assert.equal(nativeStops, stopsBeforeBackground, 'El ahorro de batería conserva el servicio');
+    assert.equal(requestedOptions.timeInterval, 300000);
+    assert.equal(requestedOptions.distanceInterval, 0);
+
+    supabase.rpc = async (name, args) => {
+      if (name === 'get_tracking_config') return { data: JSON.parse(storage.get('coupleapp.tracking')), error: null };
+      sent.push(args);
+      return { error: null };
+    };
+    const realNow = Date.now;
+    const baseTime = realNow();
+    const beforeHeartbeat = sent.length;
+    try {
+      for (const elapsed of [0, 360000]) {
+        Date.now = () => baseTime + elapsed;
+        await backgroundTask({ data: { locations: [{ timestamp: Date.now(),
+          coords: { latitude: 40, longitude: -3, accuracy: 10 } }] } });
+      }
+      assert.equal(sent.length, beforeHeartbeat + 2, 'Publica un latido estando quieto en segundo plano');
+    } finally { Date.now = realNow; }
+    await engine.configureTracking({ ...config, background_enabled: true, location_mode: 'off' });
+    assert.equal(nativeRunning, false, 'Desactivar el seguimiento sí detiene el servicio');
+    await engine.configureTracking({ ...config, background_enabled: true });
+    assert.equal(nativeRunning, true);
+    backgroundGranted = false;
+    await engine.configureTracking({ ...config, background_enabled: true });
+    assert.equal(nativeRunning, false, 'Revocar el permiso permanente detiene el servicio conservado');
+    backgroundGranted = true;
+    await engine.configureTracking({ ...config, background_enabled: true });
+    await engine.stopTracking();
+    assert.equal(nativeRunning, false, 'La pausa explícita detiene el servicio conservado');
   } finally {
     await engine.stopTracking();
     delete globalThis.__trackingTest;

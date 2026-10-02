@@ -124,3 +124,35 @@ Ajustes permite activar o desactivar cada categoría. Las opciones disponibles p
 Preparada `20260915000300_question_preferences.sql`, pendiente de despliegue tras las dos migraciones de preguntas. El servidor comprueba categorías al insertar cualquier pregunta, incluidas las personalizadas, bajo el bloqueo de pareja utilizado por las operaciones de selección y preferencias. El cliente solo recibe sus preferencias y las categorías disponibles en común; no puede leer directamente las preferencias individuales de otro usuario. No se emiten avisos por cambiar opciones.
 
 Pruebas añadidas al caso SQL de preguntas: consentimiento ausente, declaración de edad omitida, aceptación unilateral, aceptación mutua, revocación para nuevas elecciones, cuenta equivocada, categoría personalizada desactivada y aislamiento de terceros. ESLint, TypeScript y arquitectura pasan. Continúan pendientes recuerdos opcionales, planes, navegación histórica y validación desplegada/en dispositivos de esta fase.
+
+### 21 de septiembre: base de planes y recuerdos permanentes
+
+Preparada `20260921000100_plans_memories.sql`, pendiente de despliegue. Añade planes compartidos con UUID, título, categoría, nota, enlace HTTP(S), fecha opcional, estado y versión; las escrituras directas están revocadas. La RPC verifica usuario y pareja esperados, serializa las ediciones, conserva el UUID en reintentos y rechaza versiones antiguas cuando cambiarían los datos actuales.
+
+`memory_entries` establece el contrato mínimo de recuerdo permanente para planes completados: título y nota guardados explícitamente, fecha del acontecimiento separada de creación y referencia única al plan. `remember_couple_plan` bloquea el origen para crear una sola entrada. Reabrir el plan conserva el recuerdo; si posteriormente desaparece el plan, la referencia se elimina sin dejar un enlace roto. Las lecturas de ambas tablas exigen pertenecer a la pareja completa actual.
+
+Prueba SQL añadida: creación/reintento, edición por ambos, conflicto de versión, enlace inválido, rechazo de recuerdo de plan pendiente, deduplicación de recuerdo, reapertura, escrituras directas y aislamiento de terceros. Se usa PGlite; queda por verificar concurrencia real con sesiones PostgreSQL independientes. La interfaz, fotos, borrado de recuerdos y paginación cliente aún no están implementados para planes. Este bloque no cierra la fase 3 ni la fase 4.
+
+### 21 de septiembre: interfaz de planes
+
+Recuerdos abre ahora Planes. Se pueden crear/editar título, categoría, nota, enlace y fecha; cambiar entre pendiente, completado y archivado; conservar un borrador local por cuenta/pareja; y reintentar sin cambiar el UUID. El conflicto de versión ofrece cargar explícitamente la versión guardada sin sobrescribir silenciosamente el borrador. Se cargan páginas de 50 por fecha e ID; una actualización Realtime vuelve a la primera página para evitar mantener datos antiguos, por lo que falta afinar la conservación de posición durante cambios remotos.
+
+Un plan completado permite crear el recuerdo con fecha elegida. Su título, nota y fecha se consultan junto al plan, también tras reabrirlo. Se amplió la migración de planes aún no desplegada para actualizar la marca temporal del plan cuando se crea el recuerdo y refrescar la vista de ambos miembros. No se han añadido todavía fotos ni la cronología general de recuerdos.
+
+Validación: batería existente de 43 pruebas correcta, más una prueba nueva del servicio que comprueba separación de borradores, UUID estable tras fallo de red y validación previa de fecha/enlace. ESLint, TypeScript y verificación del proyecto pasan. La pantalla aún requiere prueba física de teclado, accesibilidad y gestos. Continúa pendiente desplegar la migración de planes.
+
+### 21 de septiembre: guardar check-ins y cronología inicial
+
+Inicio/Estado ofrece Guardar mi check-in como recuerdo con una explicación previa del alcance: conserva ánimo, energía y frase actuales, sin copiar respuestas de apoyo. La nueva RPC exige autor, pareja, vigencia y marca temporal esperada. No guarda nada automáticamente. La copia explícita conserva la fecha del check-in y sobrevive a su caducidad; ediciones posteriores no modifican el recuerdo.
+
+Cronología, accesible desde Recuerdos, agrupa por mes los recuerdos de planes y check-ins, con fecha del acontecimiento, autor y páginas de 50. Solo quien guardó una entrada puede retirarla tras confirmación. La retirada elimina el contenido y deja únicamente una referencia de origen retirada para que un reintento atrasado no lo vuelva a publicar. Crear y retirar recuerdos utilizan el mismo orden de bloqueo de pareja para evitar cruces entre ambas operaciones.
+
+Migración nueva pendiente: `20260921000200_checkin_memories.sql`. Las pruebas SQL verifican autoría, marca temporal antigua, idempotencia, copia independiente del estado posterior, conservación tras borrar el check-in diario, retirada y acceso de terceros. ESLint, TypeScript y arquitectura pasan. Esta cronología es inicial: aún faltan álbumes, fotos, preguntas guardadas, fechas/comienzo de relación, filtros/destacados y efemérides. La interfaz no se ha validado en dispositivo ni la migración en el servidor remoto.
+
+### 21 de septiembre: preguntas anteriores y recuerdos de respuestas
+
+Chat abre la pregunta concreta mediante su identificador; los avisos de preguntas pasan también ese identificador desde el registro autorizado de notificación. Preguntas distingue consulta histórica y elección de hoy, muestra la fecha y ofrece volver a la pregunta actual. Si el origen ya no está disponible muestra ese estado sin crear otra pregunta.
+
+Guardar como recuerdo aparece únicamente después de revelar ambas respuestas y pide una acción explícita. `20260921000300_question_memories.sql`, pendiente de despliegue, conserva pregunta, nombres y respuestas con la fecha original. La RPC vuelve a verificar pareja, usuario y revelación en servidor; dos personas guardando devuelven la misma entrada. Solo quien creó el recuerdo puede retirarlo. Se amplió la protección de orígenes retirados para impedir recrearlo mediante reintentos.
+
+Las pruebas verifican rechazo antes de revelar, conservación de ambas respuestas de una pregunta anterior, fecha original, deduplicación entre usuarios y retirada. También pasa la regresión de recuerdos de check-in, lint, TypeScript, tipos generados y verificación del proyecto. Pendiente validación de navegación real desde push/chat, concurrencia en PostgreSQL desplegado y pruebas en dispositivos. Continúa abierto el alcance restante de las fases 4–8 y las comprobaciones pendientes de fases anteriores.

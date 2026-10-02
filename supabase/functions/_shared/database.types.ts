@@ -127,6 +127,54 @@ export type Database = { public: { Tables: {
     };
     Relationships: [];
   };
+  couple_plans: {
+    Row: {
+      id: string;
+      couple_id: string;
+      creator_id: string;
+      title: string;
+      category: string;
+      note: string;
+      link: string;
+      planned_date: string | null;
+      status: string;
+      version: number;
+      created_at: string;
+      updated_at: string;
+      completed_at: string | null;
+    };
+    Insert: {
+      id: string;
+      couple_id: string;
+      creator_id: string;
+      title: string;
+      category?: string;
+      note?: string;
+      link?: string;
+      planned_date?: string | null;
+      status?: string;
+      version?: number;
+      created_at?: string;
+      updated_at?: string;
+      completed_at?: string | null;
+    };
+    Update: {
+      id?: string;
+      couple_id?: string;
+      creator_id?: string;
+      title?: string;
+      category?: string;
+      note?: string;
+      link?: string;
+      planned_date?: string | null;
+      status?: string;
+      version?: number;
+      created_at?: string;
+      updated_at?: string;
+      completed_at?: string | null;
+    };
+    Relationships: [];
+  };
   couples: {
     Row: {
       id: string;
@@ -523,6 +571,51 @@ export type Database = { public: { Tables: {
     };
     Relationships: [];
   };
+  memory_entries: {
+    Row: {
+      id: string;
+      couple_id: string;
+      author_id: string;
+      kind: string;
+      source_plan_id: string | null;
+      title: string;
+      body: string;
+      event_date: string;
+      created_at: string;
+      source_checkin_id: string | null;
+      source_question_id: string | null;
+      featured: boolean;
+    };
+    Insert: {
+      id?: string;
+      couple_id: string;
+      author_id: string;
+      kind: string;
+      source_plan_id?: string | null;
+      title: string;
+      body?: string;
+      event_date: string;
+      created_at?: string;
+      source_checkin_id?: string | null;
+      source_question_id?: string | null;
+      featured?: boolean;
+    };
+    Update: {
+      id?: string;
+      couple_id?: string;
+      author_id?: string;
+      kind?: string;
+      source_plan_id?: string | null;
+      title?: string;
+      body?: string;
+      event_date?: string;
+      created_at?: string;
+      source_checkin_id?: string | null;
+      source_question_id?: string | null;
+      featured?: boolean;
+    };
+    Relationships: [];
+  };
   messages: {
     Row: {
       id: string;
@@ -805,6 +898,24 @@ export type Database = { public: { Tables: {
     };
     Relationships: [];
   };
+  retired_memory_sources: {
+    Row: {
+      couple_id: string;
+      kind: string;
+      source_id: string;
+    };
+    Insert: {
+      couple_id: string;
+      kind: string;
+      source_id: string;
+    };
+    Update: {
+      couple_id?: string;
+      kind?: string;
+      source_id?: string;
+    };
+    Relationships: [];
+  };
   special_dates: {
     Row: {
       id: string;
@@ -1027,6 +1138,10 @@ export type Database = { public: { Tables: {
   record_geofence_entry_v2: { Args: { p_geofence_id: string; p_event_id: string; p_recorded_at: string }; Returns: string };
   record_geofence_transition: { Args: { p_geofence_id: string; p_event_id: string; p_recorded_at: string; p_transition: string }; Returns: string };
   register_device: { Args: { p_device_id: string; p_token: string; p_platform: string; p_installation_secret: string; p_expected_user_id: string }; Returns: undefined };
+  remember_checkin: { Args: { p_id: string; p_expected_updated_at: string; p_couple_id: string; p_expected_user_id: string }; Returns: Database['public']['Tables']['memory_entries']['Row'] };
+  remember_couple_plan: { Args: { p_plan_id: string; p_expected_version: number; p_event_date: string; p_couple_id: string; p_expected_user_id: string }; Returns: Database['public']['Tables']['memory_entries']['Row'] };
+  remember_question: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string }; Returns: Database['public']['Tables']['memory_entries']['Row'] };
+  remove_memory: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string }; Returns: undefined };
   renew_map_view: { Args: { p_device_id: string; p_session_id: string }; Returns: Json };
   request_account_deletion: { Args: {  }; Returns: undefined };
   request_live_location: { Args: {  }; Returns: string };
@@ -1036,6 +1151,7 @@ export type Database = { public: { Tables: {
   respond_live_location: { Args: { p_id: string; p_accept: boolean; p_device_id: string }; Returns: undefined };
   revoke_device: { Args: { p_device_id: string }; Returns: undefined };
   save_behavior_options: { Args: { p_location?: Json; p_events?: Json }; Returns: Database['public']['Tables']['user_settings']['Row'] };
+  save_couple_plan: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string; p_expected_version: number; p_title: string; p_category: string; p_note: string; p_link: string; p_planned_date: string; p_status: string }; Returns: Database['public']['Tables']['couple_plans']['Row'] };
   save_daily_checkin: { Args: { p_mood: string; p_energy: number; p_phrase: string }; Returns: Database['public']['Tables']['daily_checkins']['Row'] };
   save_settings: { Args: { p_settings: Json; p_device_id: string }; Returns: Database['public']['Tables']['user_settings']['Row'] };
   send_affection: { Args: { p_couple_id: string; p_client_id: string; p_kind: string }; Returns: Json };
@@ -1045,6 +1161,7 @@ export type Database = { public: { Tables: {
   send_message_v2: { Args: { p_text: string; p_client_id: string; p_expected_user_id: string; p_couple_id: string }; Returns: Database['public']['Tables']['messages']['Row'] };
   set_approximate_place_events: { Args: { p_enabled: boolean }; Returns: Database['public']['Tables']['user_settings']['Row'] };
   set_auto_live_enabled: { Args: { p_enabled: boolean }; Returns: Database['public']['Tables']['user_settings']['Row'] };
+  set_memory_featured: { Args: { p_id: string; p_featured: boolean; p_couple_id: string; p_expected_user_id: string }; Returns: undefined };
   set_place_sharing: { Args: { p_enabled: boolean; p_pause_location?: boolean; p_expected_user_id?: string }; Returns: Database['public']['Tables']['user_settings']['Row'] };
   set_push_token: { Args: { p_token: string }; Returns: undefined };
   set_question_category: { Args: { p_category: string; p_enabled: boolean; p_adult_confirmed: boolean; p_expected_user_id: string; p_couple_id: string }; Returns: Json };

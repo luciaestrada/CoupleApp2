@@ -22,6 +22,8 @@ export default function MemoriesScreen({ navigation }) {
       </Text>
       {[
         ['Historias', 'Fotos que os acompañan durante 24 horas', '▧'],
+        ['Planes', 'Ideas para hacer juntos y momentos completados', '✓'],
+        ['Cronología', 'Los momentos que habéis decidido conservar', '✦'],
         ['Fechas', 'Aniversarios y próximos días especiales', '◇'],
         ['Estado', 'Cuéntale cómo te sientes hoy', '♡'],
       ].map(([screen, description, symbol]) => (

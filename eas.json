@@ -14,6 +14,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "android": { "buildType": "apk" },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://supabase.pruebahomelab.es",
         "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS"
@@ -21,6 +22,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "android": { "buildType": "app-bundle" },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://supabase.pruebahomelab.es",
         "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ndByy2F3h-UoPCdQWwLljp_Yf71HQqS"

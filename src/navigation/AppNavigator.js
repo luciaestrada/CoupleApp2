@@ -20,6 +20,8 @@ import ChatScreen from '../screens/ChatScreen';
 import StoriesScreen from '../screens/StoriesScreen';
 import StatusScreen from '../screens/StatusScreen';
 import QuestionsScreen from '../screens/QuestionsScreen';
+import PlansScreen from '../screens/PlansScreen';
+import TimelineScreen from '../screens/TimelineScreen';
 import SpecialDatesScreen from '../screens/SpecialDatesScreen';
 import GeofenceSetupScreen from '../screens/GeofenceSetupScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -41,6 +43,8 @@ const parent = {
   Fechas: 'Recuerdos',
   Estado: 'Recuerdos',
   Preguntas: 'Inicio',
+  Planes: 'Recuerdos',
+  Cronología: 'Recuerdos',
   Lugares: 'Mapa',
   Avisos: 'Cuenta',
   Ajustes: 'Cuenta',
@@ -191,6 +195,8 @@ export default function AppNavigator() {
         <Tab.Screen name="Recuerdos" component={MemoriesScreen} />
         <Tab.Screen name="Chat" component={ChatScreen} />
         <Tab.Screen name="Preguntas" component={QuestionsScreen} options={{tabBarItemStyle:{display:'none'}}}/>
+        <Tab.Screen name="Planes" component={PlansScreen} options={{tabBarItemStyle:{display:'none'}}}/>
+        <Tab.Screen name="Cronología" component={TimelineScreen} options={{tabBarItemStyle:{display:'none'}}}/>
         <Tab.Screen
           options={{ tabBarItemStyle: { display: 'none' } }}
           name="Historias"

@@ -13,8 +13,7 @@
         "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para calcular la distancia con tu pareja.",
         "NSMotionUsageDescription": "Los sensores ayudan a detectar movimiento y ajustar las consultas de ubicación.",
         "UIBackgroundModes": [
-          "location",
-          "remote-notification"
+          "location"
         ],
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -40,8 +39,10 @@
           "microphonePermission": false
         }
       ],
-      ["expo-notifications", { "enableBackgroundRemoteNotifications": true }],
+      "./plugins/withLocalIosNotifications",
+      ["expo-notifications", { "enableBackgroundRemoteNotifications": false }],
       "expo-sqlite",
+      "expo-background-task",
       "expo-status-bar"
     ],
     "extra": {

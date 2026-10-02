@@ -2,6 +2,7 @@ import * as Location from 'expo-location';
 import * as Crypto from 'expo-crypto';
 import * as TaskManager from 'expo-task-manager';
 import { supabase } from '../supabase/client';
+import { syncLocalNotifications } from './localNotificationSync';
 
 export const GEOFENCE_TASK = 'GEOFENCE_TASK';
 export const MAX_GEOFENCE_REGIONS = 20;
@@ -80,8 +81,7 @@ export async function flushGeofenceEvents() {
   }
 }
 
-if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
-  TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
+async function processGeofenceTask({ data, error }) {
     if (areGeofencesPaused()) return;
     if (error || !data?.region?.identifier) return;
     const geofenceId = data.region.identifier;
@@ -111,6 +111,14 @@ if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
     });
     localStorage.setItem(EVENT_QUEUE, JSON.stringify(events.slice(-40)));
     await flushGeofenceEvents();
+}
+if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
+  TaskManager.defineTask(GEOFENCE_TASK, async (event) => {
+    try { await processGeofenceTask(event); }
+    finally {
+      if (!event.error && event.data?.region?.identifier)
+        await syncLocalNotifications({ source: 'location' }).catch(() => {});
+    }
   });
 }
 

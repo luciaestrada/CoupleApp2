@@ -9,6 +9,7 @@ import { AppState, Platform } from 'react-native';
 import { supabase } from '../../supabase/client';
 import { getDeviceId } from '../../services/deviceService';
 import { effectiveMode, shouldPublish } from './policy';
+import { syncLocalNotifications } from '../../services/localNotificationSync';
 
 export const TRACKING_TASK = 'COUPLEAPP_LOCATION_V2';
 const CONFIG_KEY = 'coupleapp.tracking';
@@ -59,6 +60,10 @@ async function stopNative() {
 }
 
 export async function stopTracking({ clear = true } = {}) {
+  return resetTracking({ clear });
+}
+
+async function resetTracking({ clear = true, preserveNative = false } = {}) {
   generation += 1;
   watcher?.remove();
   watcher = null;
@@ -77,7 +82,7 @@ export async function stopTracking({ clear = true } = {}) {
   }
   emit('paused');
   await nativeOperation(async () => {
-    try { await stopNative(); }
+    try { if (!preserveNative) await stopNative(); }
     finally { await stopActivityTracking().catch(() => {}); }
   });
 }
@@ -209,7 +214,10 @@ if (!TaskManager.isTaskDefined(TRACKING_TASK)) {
         !latest || value.timestamp > latest.timestamp ? value : latest,
       null,
     );
-    if (newest) await acceptLocation(newest);
+    if (newest) {
+      try { await acceptLocation(newest); }
+      finally { await syncLocalNotifications({ source: 'location' }).catch(() => {}); }
+    }
   });
 }
 
@@ -261,7 +269,15 @@ function armExpiry(config) {
 }
 
 export async function configureTracking(config) {
-  const stopping = stopTracking({ clear: false });
+  const previous = read(CONFIG_KEY);
+  // Updating an existing Expo task keeps its foreground service alive. Stopping
+  // it first would require a new foreground launch, forbidden in background.
+  const preserveNative = Platform.OS === 'android' && config?.background_enabled &&
+    previous?.userId === config.userId &&
+    config.tracking_device_id === getDeviceId() &&
+    !localStorage.getItem(`coupleapp.trackingPaused.${config.userId}`) &&
+    effectiveMode({ ...config, powerSave: false }) !== 'off';
+  const stopping = resetTracking({ clear: false, preserveNative });
   const current = generation;
   await stopping;
   if (current !== generation) return;
@@ -287,6 +303,7 @@ export async function configureTracking(config) {
   ]);
   if (current !== generation) return;
   if (!permission.granted || !services) {
+    await nativeOperation(stopNative);
     emit('unavailable', 'Activa la ubicación y sus permisos en Cuenta.');
     return;
   }
@@ -305,9 +322,14 @@ export async function configureTracking(config) {
       permission.android?.accuracy === 'coarse',
   };
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-  if (mode === 'off') { emit('paused', 'Ubicación temporalmente detenida por tu ajuste de batería.'); return; }
+  if (mode === 'off') {
+    await nativeOperation(stopNative);
+    emit('paused', 'Ubicación temporalmente detenida por tu ajuste de batería.');
+    return;
+  }
   const live = mode === 'live' && !config.approximate;
   const useBackground = config.background_enabled && background.granted;
+  if (!useBackground && preserveNative) await nativeOperation(stopNative);
   await nativeOperation(async () => {
     if (current !== generation) return;
     if (config.location_options?.share_activity !== false) await startActivityTracking().catch(() => {});
@@ -317,7 +339,9 @@ export async function configureTracking(config) {
   armExpiry(config);
   const options = {
     accuracy: live ? Location.Accuracy.High : Location.Accuracy.Balanced,
-    distanceInterval: live || config.trip_active ? 0 : powerSave ? 200 : (config.location_options?.normal_distance ?? (useBackground ? 100 : 50)),
+    // Android's distance gate also blocks stationary heartbeat fixes. Publication
+    // still filters noise and throttles unchanged positions in shouldPublish.
+    distanceInterval: (Platform.OS === 'android' && useBackground) || live || config.trip_active ? 0 : powerSave ? 200 : (config.location_options?.normal_distance ?? (useBackground ? 100 : 50)),
     timeInterval: live
       ? (config.location_options?.live_interval ?? 5) * 1000
       : powerSave
@@ -326,7 +350,7 @@ export async function configureTracking(config) {
           ? (config.location_options?.normal_interval ?? 180) * 1000
           : (config.location_options?.normal_interval ?? 60) * 1000,
   };
-  if (live && AppState.currentState === 'active') {
+  if (live && AppState.currentState === 'active' && !(Platform.OS === 'android' && useBackground)) {
     sampledForeground = true;
     const sampler = createLiveSampler({
       interval: (config.location_options?.live_interval ?? 20) * 1000,
@@ -348,7 +372,7 @@ export async function configureTracking(config) {
         ...options,
         pausesUpdatesAutomatically: !live,
         activityType: Location.LocationActivityType.Other,
-        deferredUpdatesInterval: live ? 0 : options.timeInterval,
+        deferredUpdatesInterval: live || Platform.OS === 'android' ? 0 : options.timeInterval,
         deferredUpdatesDistance: live ? 0 : options.distanceInterval,
         showsBackgroundLocationIndicator: true,
         ...(Platform.OS === 'android'
@@ -358,7 +382,7 @@ export async function configureTracking(config) {
                 notificationBody: live
                   ? 'Sesión en vivo · Puedes detenerla en Mapa'
                   : 'Modo de bajo consumo · Puedes detenerlo en Mapa',
-                killServiceOnDestroy: true,
+                killServiceOnDestroy: false,
               },
             }
           : {}),

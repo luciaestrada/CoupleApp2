@@ -1,6 +1,7 @@
 import { supabase } from '../supabase/client';
 import { watchQuery } from './realtimeService';
 import { nextSpecialDate } from '../utils/specialDateUtils';
+import { clearLocalReminders, syncLocalNotifications } from './localNotificationSync';
 
 export function watchSpecialDates(coupleId, handlers) {
   return watchQuery({
@@ -33,9 +34,12 @@ export async function createSpecialDate({ title, date, recurring, notifyDaysBefo
     p_notify_days_before: notifyDaysBefore,
   });
   if (error) throw error;
+  void syncLocalNotifications().catch(() => {});
 }
 
 export async function deleteSpecialDate(dateId) {
   const { error } = await supabase.rpc('delete_special_date', { p_date_id: dateId });
   if (error) throw error;
+  await clearLocalReminders();
+  void syncLocalNotifications().catch(() => {});
 }

@@ -39,6 +39,9 @@ export function TrackingProvider({ children }) {
     settings;
   const locationOptions = JSON.stringify(settings.location_options ?? {});
   useEffect(() => onTrackingStatus(setState), []);
+  useEffect(() => () => {
+    void stopTracking({ clear: false }).catch(() => {});
+  }, []);
   useEffect(() => {
     if (!user?.id) return undefined;
     let active = true;
@@ -115,7 +118,6 @@ export function TrackingProvider({ children }) {
       stopDemand();
       battery.remove();
       levels.remove();
-      void stopTracking({ clear: false }).catch(() => {});
     };
   }, [
     user?.id,

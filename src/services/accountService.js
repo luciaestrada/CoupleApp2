@@ -4,6 +4,7 @@ import { fetch } from 'expo/fetch';
 import { supabase } from '../supabase/client';
 import { stopTracking } from '../features/location/trackingEngine';
 import { registerGeofences } from './locationTask';
+import { clearLocalReminders } from './localNotificationSync';
 
 export async function updateProfile(name, avatarPath = null) {
   const { error } = await supabase.rpc('update_profile', {
@@ -56,12 +57,14 @@ export async function leaveCouple() {
   await registerGeofences([]);
   const { error } = await supabase.rpc('leave_couple');
   if (error) throw error;
+  await clearLocalReminders();
 }
 export async function requestAccountDeletion() {
   await stopTracking();
   await registerGeofences([]);
   const { error } = await supabase.rpc('request_account_deletion');
   if (error) throw error;
+  await clearLocalReminders();
 }
 export async function requestPasswordReset(email) {
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {

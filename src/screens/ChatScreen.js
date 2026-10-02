@@ -198,6 +198,9 @@ export default function ChatScreen({ navigation }) {
             >
               {item.loveTap ? item.text || '💜' : item.text}
             </Text>
+            {item.metadata?.kind==='question' && <TouchableOpacity accessibilityRole="button" onPress={()=>navigation.navigate('Preguntas',{questionId:item.metadata.questionId})} style={{minHeight:48,justifyContent:'center'}}>
+              <Text style={{color:item.senderId===userId?'white':colors.primary}}>Ver vuestras respuestas</Text>
+            </TouchableOpacity>}
             {item.metadata?.kind==='story' && <TouchableOpacity accessibilityRole="button" onPress={()=>navigation.navigate('Historias')} style={{minHeight:48,justifyContent:'center'}}>
               <Text style={{color:item.senderId===userId?'white':colors.primary}}>Ver historias disponibles</Text>
             </TouchableOpacity>}

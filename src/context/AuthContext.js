@@ -9,6 +9,7 @@ import React, {
 import { Linking } from 'react-native';
 import { revokeDevice } from '../services/deviceService';
 import { resetPushRegistration } from '../services/notificationService';
+import { configureBackgroundNotifications } from '../services/backgroundNotificationService';
 import { stopTracking } from '../features/location/trackingEngine';
 import { registerGeofences } from '../services/locationTask';
 import { supabase, startSupabaseAuthAutoRefresh } from '../supabase/client';
@@ -173,6 +174,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    await configureBackgroundNotifications(null);
     await Promise.allSettled([stopTracking(), registerGeofences([])]);
     let tokenError = null;
     try {

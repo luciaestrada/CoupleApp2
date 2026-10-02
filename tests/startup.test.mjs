@@ -89,6 +89,7 @@ test('sesión: un rechazo al recuperar la sesión sale de la carga y expone el e
     'react-native': { Linking: {} },
     '../services/deviceService': {},
     '../services/notificationService': {},
+    '../services/backgroundNotificationService': {},
     '../features/location/trackingEngine': {},
     '../services/locationTask': {},
     '../services/profileService': {},

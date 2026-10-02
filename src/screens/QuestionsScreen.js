@@ -1,5 +1,6 @@
 import React, {useCallback,useState} from 'react';
-import {AppState,KeyboardAvoidingView,Platform,ScrollView,Text,TextInput,View} from 'react-native';
+import {Alert,AppState,KeyboardAvoidingView,Platform,ScrollView,Text,TextInput,View} from 'react-native';
+import {rememberQuestion} from '../services/memoryService';
 import {useFocusEffect} from '@react-navigation/native';
 import {useHeaderHeight} from '@react-navigation/elements';
 import {usePairedAppContext} from '../contexts/AppContext';
@@ -8,7 +9,8 @@ import {Action,Banner} from '../ui/components';
 import {colors} from '../ui/theme';
 import {todayInMadrid} from '../utils/dateUtils';
 
-export default function QuestionsScreen({navigation}) {
+export default function QuestionsScreen({navigation,route}) {
+  const questionId=route.params?.questionId??null;
   const {couple,userId}=usePairedAppContext();
   const headerHeight=useHeaderHeight();
   const [snapshot,setSnapshot]=useState(null),[editor,setEditor]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(null);
@@ -24,14 +26,14 @@ export default function QuestionsScreen({navigation}) {
     clock(AppState.currentState);
     const app=AppState.addEventListener('change',clock);
     setEditor(null);setSnapshot(null);setCustom(null);
-    const stop=watchDailyQuestion(couple.id,day,{onData:value=>{setSnapshot(value);setError(null);},onError:setError});
+    const stop=watchDailyQuestion(couple.id,day,{onData:value=>{setSnapshot(value);setError(null);},onError:setError},questionId);
     return()=>{stop();clearInterval(timer);app.remove();};
-  },[couple.id,day]));
+  },[couple.id,day,questionId]));
   const q=snapshot?.question;
   const mine=snapshot?.answers.find(row=>row.user_id===userId);
   async function perform(action){
     setBusy(true);setError(null);
-    try{await action();setSnapshot(await loadQuestion(couple.id));setEditor(null);setCustom(null);}
+    try{await action();setSnapshot(await loadQuestion(couple.id,day,questionId));setEditor(null);setCustom(null);}
     catch(next){setError(next);}finally{setBusy(false);}
   }
   return <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':undefined} keyboardVerticalOffset={headerHeight}>
@@ -40,7 +42,9 @@ export default function QuestionsScreen({navigation}) {
       <Text style={{color:colors.muted}}>Cada respuesta permanece privada hasta que ambos contestéis. Podéis pasar hoy sin perder ninguna racha.</Text>
       {error && <Banner>{['42P01','PGRST205','PGRST202'].includes(error.code)?'Las preguntas estarán disponibles al actualizar el servidor.':error.message}</Banner>}
       {!snapshot && !error && <Text>Cargando…</Text>}
-      {snapshot && !q && <>
+      {questionId && <Action title="Ver la pregunta de hoy" secondary disabled={busy} onPress={()=>navigation.setParams({questionId:null})}/>}
+      {snapshot && !q && questionId && <Text>Esta pregunta ya no está disponible.</Text>}
+      {snapshot && !q && !questionId && <>
         <Text>Elegid la categoría de hoy. La primera elección será la misma para ambos.</Text>
         {[['fun','Divertida'],['romantic','Romántica'],['deep','Profunda'],['intimate','Íntima']].filter(([category])=>snapshot.preferences?.available.includes(category)).map(([category,label])=>
           <Action key={category} title={label} secondary disabled={busy} onPress={()=>perform(()=>chooseDailyQuestion(category))}/>)}
@@ -59,12 +63,18 @@ export default function QuestionsScreen({navigation}) {
       </>}
       {q && <View style={{padding:20,gap:16,borderRadius:20,backgroundColor:colors.surface}}>
         <Text style={{fontSize:20,fontWeight:'600',color:colors.text}}>{q.prompt}</Text>
+        <Text>{q.local_day.split('-').reverse().join('/')}</Text>
         {q.revealed_at ? <>
           <Text>Vuestras respuestas</Text>
           {snapshot.answers.map(row=><View key={row.user_id} style={{gap:6}}>
             <Text style={{fontWeight:'700'}}>{row.user_id===userId?'Tú':'Tu pareja'}</Text><Text selectable>{row.answer}</Text>
           </View>)}
           <Text style={{color:colors.muted}}>Ya están reveladas y no se pueden editar.</Text>
+          <Action title="Guardar como recuerdo" secondary disabled={busy} onPress={()=>Alert.alert('Guardar vuestras respuestas','La pregunta y las dos respuestas se conservarán en la cronología compartida. Quien guarde el recuerdo podrá retirarlo.',[
+            {text:'Cancelar',style:'cancel'},{text:'Guardar',onPress:()=>perform(async()=>{
+              await rememberQuestion(couple.id,userId,q.id);Alert.alert('Recuerdo guardado','Disponible en la cronología de Recuerdos.');
+            })},
+          ])}/>
         </> : Date.parse(q.closes_at)<=now ? <Text>Esta pregunta ha terminado. Las respuestas incompletas no se revelan.</Text> : <>
           {snapshot.skipped ? <>
             <Text>Has decidido pasar hoy. Puedes retomar la pregunta antes de terminar el día.</Text>

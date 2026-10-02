@@ -13,6 +13,11 @@ credentials.json
 *.p12
 *.mobileprovision
 *.jks
+*.keystore
+!android/app/debug.keystore
+android/keystore.properties
+.env.local
+.env.*.local
 
 # Generated native module outputs
 modules/**/android/.gradle/

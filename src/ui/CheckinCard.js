@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, Modal, ScrollView, KeyboardAvoidingView, Platform, Pressable } from 'react-native';
+import { Alert, View, Text, TextInput, Modal, ScrollView, KeyboardAvoidingView, Platform, Pressable } from 'react-native';
+import { rememberCheckin } from '../services/memoryService';
 import { MOODS, watchCheckins, watchCheckinResponses, saveCheckin, respondCheckin, clearCheckin } from '../services/checkinService';
 import { Action, Banner } from './components';
 import { colors } from './theme';
@@ -45,6 +46,11 @@ export default function CheckinCard({ coupleId,userId,now }) {
       </View> : <Text style={{color:colors.muted}}>Tu pareja aún no ha compartido cómo está hoy.</Text>}
       {mine && partner && mine.mood===partner.mood && <Text>Hoy ambos: {moodLabel(mine.mood)}</Text>}
       <Action title={mine?'Editar mi check-in':'Compartir cómo estoy'} onPress={edit} disabled={busy}/>
+      {mine && <Action title="Guardar mi check-in como recuerdo" secondary disabled={busy} onPress={()=>Alert.alert('Conservar este check-in','El ánimo, la energía y la frase actuales quedarán guardados y visibles para ambos después de hoy. Las respuestas de apoyo no se guardarán.',[
+        {text:'Cancelar',style:'cancel'},{text:'Guardar recuerdo',onPress:()=>perform(async()=>{
+          await rememberCheckin(coupleId,userId,mine);Alert.alert('Recuerdo guardado','Puedes consultarlo y retirarlo desde la cronología de Recuerdos.');
+        })},
+      ])}/>}
       {mine && <Action title="Retirar mi check-in" secondary disabled={busy} onPress={()=>perform(async()=>{
         await clearCheckin(mine.id);setItems(rows=>rows.filter(row=>row.id!==mine.id));
       })}/>}

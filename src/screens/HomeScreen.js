@@ -149,7 +149,7 @@ export default function HomeScreen({ navigation }) {
             <Action key={kind} title={label} secondary loading={sending} onPress={()=>handleLove(kind)}/>)}
         </View>}
       </View>
-      <MenuRow title="Pregunta del día" description="Descubrid vuestras respuestas cuando ambos contestéis" symbol="?" onPress={()=>navigation.navigate('Preguntas')}/>
+      <MenuRow title="Pregunta del día" description="Descubrid vuestras respuestas cuando ambos contestéis" symbol="?" onPress={()=>navigation.navigate('Preguntas',{questionId:null})}/>
       {focused && <TodayCard key={couple.id} coupleId={couple.id} userId={userId} now={now} navigation={navigation}/>}
       <View style={styles.card}>
         <Text style={styles.eyebrow}>CERCA, AUNQUE ESTÉIS LEJOS</Text>

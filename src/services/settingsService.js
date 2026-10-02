@@ -2,6 +2,7 @@ import { supabase } from '../supabase/client';
 import { getDeviceId } from './deviceService';
 import { watchQuery } from './realtimeService';
 import { createPrivacyQueue } from '../features/location/privacyQueue';
+import { clearLocalReminders, syncLocalNotifications } from './localNotificationSync';
 
 async function currentUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -119,5 +120,9 @@ export async function saveSettings(settings) {
     p_device_id: getDeviceId(),
   });
   if (error) throw error;
+  if (['notifications_enabled', 'dates_enabled', 'preview_enabled'].some(key => key in settings)) {
+    await clearLocalReminders();
+    void syncLocalNotifications().catch(() => {});
+  }
   return data;
 }

@@ -25,6 +25,7 @@ import {
   registerForPushNotifications,
   getPushStatus,
   watchPushStatus,
+  testLocalNotification,
 } from '../services/notificationService';
 import {
   getPermissionSnapshot,
@@ -382,12 +383,15 @@ export default function SettingsScreen({ navigation }) {
             Comprobar y activar notificaciones
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity disabled={saving} onPress={() => perform(testLocalNotification)}>
+          <Text style={styles.permissionStatus}>Enviar aviso local de prueba</Text>
+        </TouchableOpacity>
         {[
           ['notifications_enabled', 'Todos los avisos'],
           ['chat_enabled', 'Mensajes'],
           ['love_enabled', 'Gestos de afecto'],
           ['geofence_enabled', 'Llegadas y solicitudes de ubicación'],
-          ['dates_enabled', 'Fechas especiales'],
+          ['dates_enabled', 'Fechas especiales y planes'],
           ['stories_enabled', 'Historias y estados'],
           ['preview_enabled', 'Mostrar contenido en la pantalla bloqueada'],
         ].map(([key, label]) => (

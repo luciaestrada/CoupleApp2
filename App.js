@@ -10,9 +10,11 @@ import AppNavigator from './src/navigation/AppNavigator';
 import {
   registerForPushNotifications,
   startNotificationResponses,
+  startLocalNotifications,
 } from './src/services/notificationService';
 import { startGeofenceSync } from './src/services/geofenceService';
 import { startAffectionFeedback } from './src/services/affectionFeedbackService';
+import { configureBackgroundNotifications } from './src/services/backgroundNotificationService';
 import {
   registerGeofences,
   flushGeofenceEvents,
@@ -23,6 +25,14 @@ function Bootstrap() {
   const { user, userProfile, loading: authLoading } = useAuth();
   const { couple, loading: coupleLoading } = useCouple();
   useEffect(() => {
+    if (authLoading) return;
+    void configureBackgroundNotifications(user?.id ?? null).catch(() => {});
+  }, [authLoading, user?.id]);
+  useEffect(() => {
+    if (authLoading || !userProfile?.id) return undefined;
+    return startLocalNotifications(userProfile.id);
+  }, [authLoading, userProfile?.id]);
+  useEffect(() => {
     if (authLoading || coupleLoading || !user?.id || couple?.members.length !== 2) return;
     return startAffectionFeedback(couple.id,user.id);
   },[authLoading,coupleLoading,user?.id,couple?.id,couple?.members.length]);
@@ -30,6 +40,7 @@ function Bootstrap() {
   useEffect(() => {
     if (!userProfile?.id) return undefined;
     const syncPushToken = () => {
+      void configureBackgroundNotifications(userProfile.id).catch(() => {});
       void registerForPushNotifications().catch(() => {});
     };
     syncPushToken();

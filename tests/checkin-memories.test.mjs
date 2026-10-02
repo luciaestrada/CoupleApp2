@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {createDatabase,installDatabase} from './support/database.mjs';
+test('recuerdos de check-in: autor, versión, caducidad y retirada sin recreación',async()=>{
+  const db=await createDatabase();
+  try{
+    await installDatabase(db);
+    const a=randomUUID(),b=randomUUID(),third=randomUUID();
+    const as=async id=>{await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);await db.exec('set role authenticated');};
+    const value=async(sql,args=[]) => (await db.query(sql,args)).rows[0].v;
+    for(const id of [a,b,third])await db.query('insert into auth.users values($1,$2,$3)',[id,id+'@test.invalid','{}']);
+    await as(a);const couple=await value('select public.create_couple(current_date) v');
+    await as(b);await db.query('select public.join_couple($1)',[couple.inviteCode??couple.invite_code]);
+    const c=await value('select public.current_couple_id() v');
+    await as(a);
+    const checkin=await value("select to_jsonb(public.save_daily_checkin('calm',3,'Una tarde tranquila')) v");
+    assert.equal(await value('select count(*)::int v from public.memory_entries'),0);
+    const remember='select to_jsonb(public.remember_checkin($1,$2,$3,$4)) v';
+    await assert.rejects(db.query(remember,[checkin.id,'2000-01-01',c,a]),/Actualiza/);
+    const memory=await value(remember,[checkin.id,checkin.updated_at,c,a]);
+    assert.equal((await value(remember,[checkin.id,checkin.updated_at,c,a])).id,memory.id);
+    await db.query("select public.save_daily_checkin('happy',4,'Frase posterior')");
+    assert.match(await value('select body v from public.memory_entries'),/Una tarde tranquila/);
+    await as(b);
+    await assert.rejects(db.query(remember,[checkin.id,checkin.updated_at,c,b]),/no disponible/);
+    await assert.rejects(db.query('select public.remove_memory($1,$2,$3)',[memory.id,c,b]),/Solo quien/);
+    const other=await value("select to_jsonb(public.save_daily_checkin('happy',4,'Recuerdo de B')) v");
+    await value(remember,[other.id,other.updated_at,c,b]);
+    await as(a);
+    await db.query('select public.remove_memory($1,$2,$3)',[memory.id,c,a]);
+    await db.query('select public.remove_memory($1,$2,$3)',[memory.id,c,a]);
+    const current=await value('select to_jsonb(d) v from public.daily_checkins d where id=$1',[checkin.id]);
+    await assert.rejects(db.query(remember,[checkin.id,current.updated_at,c,a]),/retirado/);
+    await db.exec('reset role');await db.exec('delete from public.daily_checkins');
+    await as(b);
+    assert.match(await value('select body v from public.memory_entries'),/Recuerdo de B/);
+    await as(third);
+    assert.equal(await value('select count(*)::int v from public.memory_entries'),0);
+    await assert.rejects(db.query('select public.remove_memory($1,$2,$3)',[memory.id,c,third]),/no disponible/);
+  }finally{await db.close();}
+});
