@@ -27,11 +27,17 @@ ejecutarla y puede retrasarla considerablemente. No necesita activar la ubicaci�
 También revalida las solicitudes del mapa con `syncTrackingConfig` sin otorgar
 consentimiento ni iniciar seguimiento si falta una configuración autorizada.
 
-Las tareas de ubicación y geofencing consultan los avisos después de procesar
-sus eventos reales. Estas consultas se limitan a una por minuto; no modifican
+Las tareas de ubicación y geofencing consultan los avisos en paralelo al procesamiento
+de sus eventos reales. Estas consultas se limitan a una por minuto; no modifican
 frecuencia, precisión ni pausa del GPS. Los tres ejecutores comparten una cola,
 estado persistente por cuenta y deduplicación. Las consultas de datos tienen
 cancelación por plazo y la tarea de fondo atiende la expiración del sistema.
+Una consulta de fondo tiene prioridad sobre consultas de primer plano pendientes.
+La consulta y presentación de mensajes precede a la reconciliación de recordatorios;
+un error al consultar el calendario o planes no impide presentar los mensajes.
+Las esperas de autenticación, datos y programación están acotadas: 10 segundos
+para el trabajo de fondo y 15 para el de primer plano. Esto no permite despertar
+la app cuando iOS no concede ejecución.
 
 Cada aviso se presenta mediante `scheduleNotificationAsync` y al tocarlo utiliza
 la validación y navegación existentes. Se oculta el cuerpo salvo consentimiento
@@ -90,6 +96,9 @@ y [Expo BackgroundTask](https://docs.expo.dev/versions/latest/sdk/background-tas
    notificaciones. Debe indicar que los avisos locales están activados.
 3. Pulsar Enviar aviso local de prueba y comprobar banner y sonido según los
    ajustes del iPhone, incluyendo los modos de concentración.
+   Usar también «Probar aviso con pantalla bloqueada» y bloquearla antes de
+   15 segundos. La prueba verifica la presentación local de un aviso ya programado;
+   no demuestra que la app consulte mensajes del servidor estando suspendida.
 4. Con la app abierta fuera de Chat, enviar un mensaje desde la cuenta de la
    pareja. Comprobar aviso, cuerpo oculto y navegación a Chat al tocarlo.
 5. Activar previsualización y verificar que los nuevos avisos muestran el cuerpo.
@@ -111,6 +120,30 @@ y [Expo BackgroundTask](https://docs.expo.dev/versions/latest/sdk/background-tas
     de la cuenta anterior. Con previsualización desactivada no aparece su título.
 12. Deslizar para cerrar la app: no esperar mensajes nuevos; comprobar que los
     recordatorios previamente programados siguen siendo entregados por iOS.
+
+## Diagnóstico cuando solo llegan en primer plano
+
+Ajustes → Notificaciones → «Diagnosticar segundo plano» muestra el permiso de
+ubicación permanente, el registro del seguimiento y de las zonas, la tarea
+periódica y las últimas consultas completadas por cada origen. Para ubicación se
+muestran las completadas con la app en segundo plano; una consulta con la app
+activa no acredita ejecución de fondo. El historial de
+diagnóstico se guarda por cuenta, sin contenido de mensajes, tokens ni errores
+sin filtrar.
+
+El módulo nativo comprueba la configuración de la instalación, la actualización
+en segundo plano y el bajo consumo del iPhone. Requiere una nueva compilación;
+una instalación anterior informa de que falta este diagnóstico. Que una tarea
+figure como registrada no confirma que el sistema la haya ejecutado.
+
+Después de instalar la compilación, abrirla, bloquear la pantalla y enviar un
+mensaje desde la pareja, consultar el informe. Si el seguimiento está registrado,
+realizar la misma prueba durante un desplazamiento real. La ubicación cotidiana
+puede pausar actualizaciones estando quieto o diferir lotes hasta cumplir sus
+umbrales de tiempo y distancia; no funciona como un temporizador de mensajes.
+El informe distingue ausencia de oportunidades de ejecución de errores de
+sesión, permisos, conexión, tiempo o tablas del servidor. Una tarea periódica
+puede tardar horas en ejecutarse; 15 minutos es un mínimo solicitado.
 
 ## Validación local
 

@@ -114,11 +114,12 @@ async function processGeofenceTask({ data, error }) {
 }
 if (!TaskManager.isTaskDefined(GEOFENCE_TASK)) {
   TaskManager.defineTask(GEOFENCE_TASK, async (event) => {
-    try { await processGeofenceTask(event); }
-    finally {
-      if (!event.error && event.data?.region?.identifier)
-        await syncLocalNotifications({ source: 'location' }).catch(() => {});
-    }
+    const [eventResult] = await Promise.allSettled([
+      processGeofenceTask(event),
+      !event.error && event.data?.region?.identifier
+        ? syncLocalNotifications({ source: 'location' }) : Promise.resolve(),
+    ]);
+    if (eventResult.status === 'rejected') throw eventResult.reason;
   });
 }
 

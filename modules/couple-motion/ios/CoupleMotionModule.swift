@@ -1,5 +1,6 @@
 import CoreMotion
 import ExpoModulesCore
+import UIKit
 
 public final class CoupleMotionModule: Module {
   private let manager = CMMotionActivityManager()
@@ -14,6 +15,27 @@ public final class CoupleMotionModule: Module {
   }
   public func definition() -> ModuleDefinition {
     Name("CoupleMotion")
+    AsyncFunction("getBackgroundExecutionStateAsync") { () -> [String: Any] in
+      let refresh: String
+      switch UIApplication.shared.backgroundRefreshStatus {
+      case .available: refresh = "available"
+      case .denied: refresh = "denied"
+      case .restricted: refresh = "restricted"
+      @unknown default: refresh = "unknown"
+      }
+      #if targetEnvironment(simulator)
+      let simulator = true
+      #else
+      let simulator = false
+      #endif
+      return [
+        "backgroundRefreshStatus": refresh,
+        "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled,
+        "backgroundModes": Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? [],
+        "schedulerIdentifiers": Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? [],
+        "simulator": simulator
+      ]
+    }.runOnQueue(.main)
     AsyncFunction("requestPermissionsAsync") { (promise: Promise) in
       guard CMMotionActivityManager.isActivityAvailable() else { promise.resolve(["granted": false]); return }
       manager.queryActivityStarting(from: Date().addingTimeInterval(-60), to: Date(), to: .main) { _, _ in

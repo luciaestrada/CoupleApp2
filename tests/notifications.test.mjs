@@ -5,12 +5,13 @@ import { Buffer } from 'node:buffer';
 
 test('push: los fallos se reflejan en Ajustes y revocar permisos no queda bloqueado por el reintento', async () => {
   let granted = true;
-  const tokens = [], states = [];
+  const tokens = [], states = [], localRequests = [];
   const storage = new Map();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) } });
   const constants = { easConfig: { projectId: 'project' } };
   globalThis.__pushTest = {
-    Notifications: { setNotificationHandler: () => {}, setNotificationChannelAsync: async () => {}, AndroidImportance: { HIGH: 4, DEFAULT: 3 }, getExpoPushTokenAsync: async () => { throw Error('Default FirebaseApp is not initialized'); } },
+    Notifications: { setNotificationHandler: () => {}, setNotificationChannelAsync: async () => {}, AndroidImportance: { HIGH: 4, DEFAULT: 3 }, getExpoPushTokenAsync: async () => { throw Error('Default FirebaseApp is not initialized'); },
+      SchedulableTriggerInputTypes: { TIME_INTERVAL: 'timeInterval' }, scheduleNotificationAsync: async request => localRequests.push(request) },
     Constants: constants,
     AppState: { currentState: 'active' }, Platform: { OS: 'android' },
     supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: 'user' } } } }) } },
@@ -40,6 +41,10 @@ test('push: los fallos se reflejan en Ajustes y revocar permisos no queda bloque
     assert.equal((await service.registerForPushNotifications()).status, 'local');
     assert.equal(tokens.at(-1), null);
     assert.equal(storage.has('coupleapp.pushToken'), false);
+    await service.testLocalNotification({ delaySeconds: 15 });
+    assert.deepEqual(localRequests.at(-1).trigger, { type: 'timeInterval', seconds: 15 });
+    await service.testLocalNotification();
+    assert.equal(localRequests.at(-1).trigger, null);
     assert.equal((await service.registerForPushNotifications()).status, 'local');
     granted = false;
     assert.equal((await service.registerForPushNotifications()).status, 'denied');

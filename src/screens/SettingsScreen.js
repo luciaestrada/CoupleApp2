@@ -11,6 +11,7 @@ import {
   TextInput,
   Switch,
   Image,
+  Platform,
 } from 'react-native';
 import { useAppContext } from '../contexts/AppContext';
 import { useTracking } from '../context/TrackingContext';
@@ -45,6 +46,7 @@ import SharingSettings from '../ui/SharingSettings';
 import AffectionSettings from '../ui/AffectionSettings';
 import QuestionSettings from '../ui/QuestionSettings';
 import { EventSettings, LocationBehaviorSettings } from '../ui/BehaviorSettings';
+import { getBackgroundNotificationReport } from '../services/backgroundNotificationDiagnostics';
 function SettingsSection({ title, description, expanded, onPress, children }) {
   return (
     <View style={styles.card}>
@@ -386,6 +388,19 @@ export default function SettingsScreen({ navigation }) {
         <TouchableOpacity disabled={saving} onPress={() => perform(testLocalNotification)}>
           <Text style={styles.permissionStatus}>Enviar aviso local de prueba</Text>
         </TouchableOpacity>
+        {Platform.OS === 'ios' && <>
+          <TouchableOpacity disabled={saving} onPress={() => perform(async () => {
+            Alert.alert('Segundo plano', await getBackgroundNotificationReport());
+          })}>
+            <Text style={styles.permissionStatus}>Diagnosticar segundo plano</Text>
+          </TouchableOpacity>
+          <TouchableOpacity disabled={saving} onPress={() => perform(async () => {
+            await testLocalNotification({ delaySeconds: 15 });
+            Alert.alert('Prueba programada', 'Bloquea la pantalla ahora. El aviso aparecerá en unos 15 segundos. Esta prueba comprueba la presentación local, no la consulta del servidor.');
+          })}>
+            <Text style={styles.permissionStatus}>Probar aviso con pantalla bloqueada</Text>
+          </TouchableOpacity>
+        </>}
         {[
           ['notifications_enabled', 'Todos los avisos'],
           ['chat_enabled', 'Mensajes'],

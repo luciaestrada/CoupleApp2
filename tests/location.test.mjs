@@ -138,6 +138,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   let nativeRunning = false;
   let nativeStops = 0;
   let backgroundTask;
+  let notificationSyncs = 0;
   const sent = [];
   const Location = {
     Accuracy: { High: 6, Balanced: 3 },
@@ -187,7 +188,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     shouldPublish,
     startActivityTracking: async()=>{ activityRunning = true; },
     stopActivityTracking:async()=>{ activityRunning = false; }, readActivity:async()=>null,
-    syncLocalNotifications: async () => {},
+    syncLocalNotifications: async () => notificationSyncs++,
   };
   const source = (
     await readFile(
@@ -255,6 +256,13 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
     assert.equal(requestedOptions.timeInterval, 180000);
     assert.equal(requestedOptions.distanceInterval, 100);
     assert.equal(activityRunning, true);
+    const beforeNotifications = notificationSyncs;
+    const locationExecution = backgroundTask({ data: { locations: [{ timestamp: Date.now(),
+      coords: { latitude: 40, longitude: -3, accuracy: 10 } }] } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(notificationSyncs, beforeNotifications + 1, 'Consulta avisos sin esperar al envío de ubicación pendiente');
+    rpcResolve({ error: null });
+    await locationExecution;
     await engine.configureTracking(null);
     assert.equal(activityRunning, false, 'Una configuración revocada también detiene el reconocimiento nativo');
     await engine.configureTracking({ ...config, location_options: { low_battery_mode: 'off' } });
@@ -352,7 +360,7 @@ test('geofences: no consulta servicios nativos sin permiso permanente y se recup
     Crypto: { randomUUID },
     Platform: { OS: 'android' },
     TaskManager: { isTaskDefined: () => true },
-    supabase: {},
+    supabase: {}, syncLocalNotifications: async () => {},
   };
   const source = (
     await readFile(
@@ -361,7 +369,7 @@ test('geofences: no consulta servicios nativos sin permiso permanente y se recup
     )
   ).replace(/^import .*;\r?\n/gm, '');
   const module = await import(
-    `data:text/javascript;base64,${Buffer.from('const {Location,Crypto,Platform,TaskManager,supabase}=globalThis.__geofenceTest;\n' + source).toString('base64')}`
+    `data:text/javascript;base64,${Buffer.from('const {Location,Crypto,Platform,TaskManager,supabase,syncLocalNotifications}=globalThis.__geofenceTest;\n' + source).toString('base64')}`
   );
   const places = [{ id: 'a', lat: 40, lng: -3, radiusMeters: 150 }];
   try {

@@ -326,13 +326,13 @@ export function startLocalNotifications(userId, { onError = () => {} } = {}) {
   return () => { active = false; clearInterval(timer); stops.forEach(stop => stop()); };
 }
 
-export async function testLocalNotification() {
+export async function testLocalNotification({ delaySeconds = 0 } = {}) {
   const permission = await getNotificationPermission();
   if (!permission.granted) throw new Error('Activa primero el permiso de notificaciones.');
   await Notifications.scheduleNotificationAsync({
     identifier: 'coupleapp-notification-test',
     content: { title: 'CoupleApp', body: 'Las notificaciones locales funcionan en este dispositivo.', sound: 'default' },
-    trigger: null,
+    trigger: delaySeconds > 0 ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: delaySeconds } : null,
   });
 }
 export function watchNotifications(userId, handlers) {

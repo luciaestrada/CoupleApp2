@@ -215,8 +215,10 @@ if (!TaskManager.isTaskDefined(TRACKING_TASK)) {
       null,
     );
     if (newest) {
-      try { await acceptLocation(newest); }
-      finally { await syncLocalNotifications({ source: 'location' }).catch(() => {}); }
+      const [locationResult] = await Promise.allSettled([
+        acceptLocation(newest), syncLocalNotifications({ source: 'location' }),
+      ]);
+      if (locationResult.status === 'rejected') throw locationResult.reason;
     }
   });
 }
