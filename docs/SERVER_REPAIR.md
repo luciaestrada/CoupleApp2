@@ -3,14 +3,34 @@
 El diagnóstico remoto detectó que `maintenance` devuelve HTTP 500 porque el runtime
 no encuentra un punto de entrada. `push` arranca y exige autenticación. Este paquete
 contiene los dos workers y sus archivos compartidos, las migraciones y un script
-para desplegarlos en una instalación Linux con Docker Compose.
+para desplegarlos en una instalación Linux con Docker. No necesitas un `Dockerfile`
+ni disponer del archivo de Compose para reparar los contenedores existentes.
 
 ## Ejecución
 
 1. Copia `coupleapp-server-repair.zip` al servidor Linux y descomprímelo en una
    carpeta separada de la instalación de Supabase.
-2. Desde esa carpeta, sustituye `/ruta/supabase/docker` por la carpeta que contiene
-   el `docker-compose.yml` de tu instalación:
+2. Desde esa carpeta, diagnostica y después aplica:
+
+```bash
+bash scripts/repair-server.sh
+bash scripts/repair-server.sh --apply
+```
+
+Se detecta el contenedor de funciones usando sus etiquetas de Docker o la imagen
+de Supabase Edge Runtime. Si no hay un resultado único, ejecuta `docker ps` y usa:
+
+```bash
+bash scripts/repair-server.sh --container NOMBRE_FUNCIONES --apply
+```
+
+Para incluir el diagnóstico SQL cuando no se detecta la base de datos, añade
+`--db-container NOMBRE_BASE_DE_DATOS`. Sin él, puedes desplegar los workers,
+pero el script informa que omite el diagnóstico SQL. No instala Docker ni crea
+una instalación nueva de Supabase.
+
+Si tienes el archivo de Compose, también puedes sustituir `/ruta/supabase/docker`
+por la carpeta que contiene tu `docker-compose.yml`:
 
 ```bash
 bash scripts/repair-server.sh --compose-dir /ruta/supabase/docker
@@ -18,7 +38,8 @@ bash scripts/repair-server.sh --compose-dir /ruta/supabase/docker --apply
 ```
 
 El primer comando diagnostica. El segundo guarda una copia en
-`coupleapp-repair-backups`, copia `push`, `maintenance` y `_shared` al montaje que
+`coupleapp-repair-backups` junto a la carpeta de funciones (o dentro de la carpeta
+de Compose), copia `push`, `maintenance` y `_shared` al montaje que
 Docker usa para las funciones y reinicia el servicio `functions`. Conserva `main`
 y las demás funciones. Comprueba HTTP 401 sin credenciales para verificar arranque
 y autenticación. Necesita acceso a Docker y permisos de escritura en ese montaje.
@@ -45,7 +66,7 @@ antes de repetir. No se incluye ni se ejecuta `setup.sql`.
 
 El script imprime el montaje de funciones y la carpeta de la copia. Para restaurar
 sus archivos, extrae `functions-before.tar.gz` sobre ese mismo montaje y reinicia
-`functions` desde la carpeta de Compose. Si aplicaste migraciones, la restauración
+el contenedor con `docker restart NOMBRE_FUNCIONES`. Si aplicaste migraciones, la restauración
 de la base de datos es una operación separada que debe planificarse con el dump.
 
 ## Alcance

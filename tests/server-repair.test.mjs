@@ -25,20 +25,27 @@ test('server repair deploys only application workers and keeps a backup', { skip
 echo "$*" >> "$TEST_ROOT/docker-calls"
 if [[ "$1" == inspect ]]; then echo '[]'; fi
 if [[ "$1 $2" == 'compose ps' ]]; then echo container-id; fi
+if [[ "$1" == ps && "$*" == *'service=functions'* ]]; then echo container-id; fi
 if [[ "$1 $2" == 'compose exec' ]]; then cat >/dev/null; fi
+if [[ "$1" == exec ]]; then cat >/dev/null; fi
 `,
       python3: '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%s\\n" "$TEST_ROOT/mounted"\n',
       curl: '#!/usr/bin/env bash\nprintf 401\n',
     };
     for (const [name, value] of Object.entries(fixtures))
       await writeFile(join(root, `bin/${name}`), value, { mode: 0o755 });
-    const run = (apply) => spawnSync(bash, ['-c',
-      'export TEST_ROOT="$PWD"; export PATH="$PWD/bin:$PATH"; bash scripts/repair-server.sh --compose-dir "$PWD/compose" ' + (apply ? '--apply' : '')],
+    const run = (apply, compose = true) => spawnSync(bash, ['-c',
+      'export TEST_ROOT="$PWD"; export PATH="$PWD/bin:$PATH"; bash scripts/repair-server.sh ' +
+      (compose ? '--compose-dir "$PWD/compose" ' : '') + (apply ? '--apply' : '')],
       { cwd: root, encoding: 'utf8', timeout: 20000 });
     const diagnostic = run(false);
     assert.equal(diagnostic.status, 0, diagnostic.stderr + diagnostic.stdout);
     assert.equal(existsSync(join(root, 'mounted/push/index.ts')), false);
     assert.doesNotMatch(await readFile(join(root, 'docker-calls'), 'utf8'), /restart/);
+    const directDiagnostic = run(false, false);
+    assert.equal(directDiagnostic.status, 0, directDiagnostic.stderr + directDiagnostic.stdout);
+    assert.match(directDiagnostic.stdout, /SQL diagnostics skipped/);
+    assert.equal(existsSync(join(root, 'mounted/push/index.ts')), false);
     const deploy = run(true);
     assert.equal(deploy.status, 0, deploy.stderr + deploy.stdout);
     assert.equal(await readFile(join(root, 'mounted/maintenance/index.ts'), 'utf8'), '// maintenance\n');
@@ -50,6 +57,10 @@ if [[ "$1 $2" == 'compose exec' ]]; then cat >/dev/null; fi
     const calls = await readFile(join(root, 'docker-calls'), 'utf8');
     assert.match(calls, /compose restart functions/);
     assert.doesNotMatch(calls, /pg_dump|down|setup.sql/);
+    const directDeploy = run(true, false);
+    assert.equal(directDeploy.status, 0, directDeploy.stderr + directDeploy.stdout);
+    assert.match(await readFile(join(root, 'docker-calls'), 'utf8'), /restart container-id/);
+    assert.equal((await readdir(join(root, 'coupleapp-repair-backups'))).length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

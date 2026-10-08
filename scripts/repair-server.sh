@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Run on the Linux host of a self-hosted Supabase Docker Compose installation.
+# Run on the Linux host of an existing self-hosted Supabase Docker installation.
 set -Eeuo pipefail
 umask 077
 
 usage() {
   cat <<'TEXT'
-Usage: bash scripts/repair-server.sh --compose-dir /path/to/supabase [--apply]
+Usage: bash scripts/repair-server.sh [--apply]
+       [--container FUNCTIONS_CONTAINER] [--db-container DATABASE_CONTAINER]
+       [--compose-dir /path/to/supabase]
        [--url https://supabase.example.com] [--functions-service functions]
        [--db-service db] [--migrate-after YYYYMMDDHHMMSS]
 
 Without --apply: inspect containers, function mounts, SQL capabilities and HTTP.
+Without --compose-dir: use existing Docker containers; no Compose file is needed.
 With --apply: back up files, deploy push/maintenance/_shared, restart functions,
 and verify both handlers. No setup.sql, no database reset, no volume removal.
 --migrate-after applies ONLY migrations newer than an explicitly supplied known
@@ -19,10 +22,13 @@ TEXT
 
 compose_dir=''; public_url='https://supabase.pruebahomelab.es'; apply=false
 functions_service=functions; db_service=db; migrate_after=''
+container=''; db_container=''
 source_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 while (($#)); do
   case "$1" in
     --compose-dir) compose_dir=${2:?Missing directory}; shift 2 ;;
+    --container) container=${2:?Missing container}; shift 2 ;;
+    --db-container) db_container=${2:?Missing database container}; shift 2 ;;
     --url) public_url=${2:?Missing URL}; shift 2 ;;
     --functions-service) functions_service=${2:?Missing service}; shift 2 ;;
     --db-service) db_service=${2:?Missing service}; shift 2 ;;
@@ -32,17 +38,46 @@ while (($#)); do
     *) usage; exit 2 ;;
   esac
 done
-[[ -n "$compose_dir" ]] || { usage; exit 2; }
+[[ -z "$compose_dir" || ( -z "$container" && -z "$db_container" ) ]] || {
+  echo 'Use either Compose mode or direct container mode'; exit 2;
+}
 [[ -z "$migrate_after" || "$migrate_after" =~ ^[0-9]{14}$ ]] || { echo 'Invalid migration baseline'; exit 2; }
 [[ "$public_url" == https://* && "$public_url" != *'@'* && "$public_url" != *'?'* && "$public_url" != *'#'* ]] || {
   echo 'Use an HTTPS base URL without credentials, query or fragment'; exit 2;
 }
 for command in docker curl python3 tar; do command -v "$command" >/dev/null || { echo "Missing command: $command"; exit 2; }; done
-compose_dir=$(cd -- "$compose_dir" && pwd -P)
-cd -- "$compose_dir"
-docker compose version >/dev/null
-container=$(docker compose ps -q "$functions_service")
-[[ -n "$container" && "$container" != *$'\n'* ]] || { echo 'Expected one running functions container'; exit 2; }
+if [[ -n "$compose_dir" ]]; then
+  compose_dir=$(cd -- "$compose_dir" && pwd -P)
+  cd -- "$compose_dir"
+  docker compose version >/dev/null
+  container=$(docker compose ps -q "$functions_service")
+else
+  if [[ -z "$container" ]]; then
+    container=$(docker ps -q --filter 'label=com.docker.compose.service=functions')
+    if [[ -z "$container" ]]; then container=$(docker ps -q --filter 'ancestor=supabase/edge-runtime'); fi
+  fi
+  if [[ -z "$db_container" ]]; then
+    candidate=$(docker ps -q --filter 'label=com.docker.compose.service=db')
+    if [[ -n "$candidate" && "$candidate" != *$'\n'* ]]; then db_container=$candidate; fi
+  fi
+fi
+[[ "$container" != -* && "$db_container" != -* && "$db_container" != *$'\n'* ]] || {
+  echo 'Invalid container name'; exit 2;
+}
+functions_exec() {
+  if [[ -n "$compose_dir" ]]; then docker compose exec -T "$functions_service" "$@";
+  else docker exec -i "$container" "$@"; fi
+}
+db_exec() {
+  if [[ -n "$compose_dir" ]]; then docker compose exec -T "$db_service" "$@";
+  else docker exec -i "$db_container" "$@"; fi
+}
+[[ -z "$migrate_after" || -n "$compose_dir$db_container" ]] || {
+  echo 'Migrations require --db-container NAME when the database cannot be detected'; exit 2;
+}
+[[ -n "$container" && "$container" != *$'\n'* ]] || {
+  echo 'No unique functions container found. Run docker ps, then pass --container NAME'; exit 2;
+}
 mount=$(docker inspect "$container" | python3 -c '
 import json,sys
 items=[m for m in json.load(sys.stdin)[0]["Mounts"] if m["Destination"]=="/home/deno/functions" and m["Type"]=="bind"]
@@ -61,7 +96,7 @@ if [[ -n "$migrate_after" ]]; then
 fi
 echo "Functions container: $container"
 echo "Functions directory on host: $mount"
-docker compose exec -T "$functions_service" sh -c '
+functions_exec sh -c '
   test -f /home/deno/functions/main/index.ts || { echo "Missing main/index.ts; repair the base Supabase installation first"; exit 1; }
   for name in push maintenance; do
     if test -f "/home/deno/functions/$name/index.ts"; then echo "$name/index.ts exists"; else echo "$name/index.ts MISSING"; fi
@@ -71,17 +106,22 @@ docker compose exec -T "$functions_service" sh -c '
   echo "Server URL and secret key configuration present (values hidden)"
 '
 
-sql() { docker compose exec -T "$db_service" sh -c 'exec psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -v ON_ERROR_STOP=1' ; }
+sql() { db_exec sh -c 'exec psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -v ON_ERROR_STOP=1' ; }
 echo 'Database capabilities (names only):'
-sql < "$source_root/scripts/server-diagnostics.sql"
+if [[ -n "$compose_dir$db_container" ]]; then
+  sql < "$source_root/scripts/server-diagnostics.sql"
+else
+  echo 'Database not detected; SQL diagnostics skipped. Use --db-container NAME to include them.'
+fi
 
 if "$apply"; then
-  backup="$compose_dir/coupleapp-repair-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  backup_root=${compose_dir:-$(dirname -- "$mount")}
+  backup="$backup_root/coupleapp-repair-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p -- "$backup"
   tar -C "$mount" -czf "$backup/functions-before.tar.gz" .
   echo "Backup: $backup"
   if [[ -n "$migrate_after" ]]; then
-    docker compose exec -T "$db_service" sh -c 'exec pg_dump -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -Fc' > "$backup/database-before.dump"
+    db_exec sh -c 'exec pg_dump -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -Fc' > "$backup/database-before.dump"
     [[ -s "$backup/database-before.dump" ]] || { echo 'Empty database backup; stopping'; exit 1; }
     # Execute only the explicitly selected suffix of migration history.
     while IFS= read -r migration; do
@@ -101,8 +141,9 @@ if "$apply"; then
     find "$mount/$name" -type d -exec chmod a+rx {} +
     find "$mount/$name" -type f -exec chmod a+r {} +
   done
-  docker compose exec -T "$functions_service" sh -c 'test -f /home/deno/functions/push/index.ts && test -f /home/deno/functions/maintenance/index.ts && test -f /home/deno/functions/_shared/database.types.ts'
-  docker compose restart "$functions_service"
+  functions_exec sh -c 'test -f /home/deno/functions/push/index.ts && test -f /home/deno/functions/maintenance/index.ts && test -f /home/deno/functions/_shared/database.types.ts'
+  if [[ -n "$compose_dir" ]]; then docker compose restart "$functions_service";
+  else docker restart "$container"; fi
 fi
 
 failed=0
@@ -119,7 +160,7 @@ for name in push maintenance; do
   if ! "$success"; then failed=1; fi
 done
 if ((failed)); then
-  echo 'A worker still does not boot/authenticate correctly. Inspect locally: docker compose logs --tail 100 functions'
+  echo "A worker still does not boot/authenticate correctly. Inspect locally: docker logs --tail 100 $container"
   echo 'Do not post raw logs or .env: they may contain private credentials.'
   exit 1
 fi
