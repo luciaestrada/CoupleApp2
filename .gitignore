@@ -2,6 +2,7 @@ node_modules/
 .npm-cache/
 .expo/
 .expo-export-*/
+artifacts/
 
 npm-debug.log*
 

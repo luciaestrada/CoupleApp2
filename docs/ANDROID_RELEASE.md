@@ -5,6 +5,19 @@ no ejecutes `expo prebuild --clean`, ya que sustituiría las personalizaciones.
 
 ## Compilación local
 
+En Windows, ejecuta desde la carpeta del proyecto:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-signed-apk.ps1
+```
+
+El script instala dependencias si faltan, detecta el JDK y SDK de Android Studio,
+compila la variante release con la clave configurada y verifica su firma mediante
+`apksigner`. El resultado verificado se copia a `artifacts/CoupleApp-release.apk`,
+junto con su checksum `.sha256`. Usa `-Check` para comprobar el entorno y la
+configuración de firma sin compilar el APK. No crea ni sustituye la clave de firma.
+En Linux/macOS, usa `npm ci` y `npm run android:release:apk` con JDK y SDK instalados.
+
 Instala las dependencias con `npm ci` y los componentes Android SDK solicitados
 por Gradle desde Android Studio. Usa el JDK 21 de Android Studio o configura
 `JAVA_HOME`; configura `ANDROID_HOME` si el SDK está en una ubicación distinta.
