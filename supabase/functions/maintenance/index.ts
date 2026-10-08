@@ -45,8 +45,13 @@ export default {
         result.errors.push(`No se pudieron limpiar los check-ins: ${errorMessage(error)}`);
       }
       try {
+        const { data: count, error } = await admin.rpc('claim_story_cleanup', { p_limit: 100 });
+        if (error) throw error;
+        result.removedStories = count ?? 0;
+      } catch (error) { result.errors.push(errorMessage(error)); }
+      try {
         const { data: abandoned, error: loadError } = await admin.from('media_assets')
-          .select('id').is('published_at', null).lte('expires_at', new Date().toISOString()).limit(100);
+          .select('id').neq('purpose', 'story').is('published_at', null).lte('expires_at', new Date().toISOString()).limit(100);
         if (loadError) throw loadError;
         if (abandoned?.length) {
           const { error } = await admin.from('media_assets').delete().in('id', abandoned.map(row => row.id))
@@ -57,45 +62,16 @@ export default {
           .select('id,bucket_id,object_path').order('id').limit(100);
         if (jobsError) throw jobsError;
         for (const job of jobs ?? []) {
+          try {
           const { error } = await admin.storage.from(job.bucket_id).remove([job.object_path]);
           if (error) throw error;
           const { error: deleteError } = await admin.from('media_deletions').delete().eq('id', job.id);
           if (deleteError) throw deleteError;
           result.removedMedia += 1;
+          } catch (error) { result.errors.push(`Archivo ${job.id}: ${errorMessage(error)}`); }
         }
       } catch (error) {
         result.errors.push(`No se pudieron limpiar los archivos compartidos: ${errorMessage(error)}`);
-      }
-
-      try {
-        const { data: expiredStories, error: storiesError } = await admin
-          .from('stories')
-          .select('id,image_path')
-          .lte('expires_at', new Date().toISOString())
-          .order('expires_at')
-          .limit(100);
-        if (storiesError) throw storiesError;
-
-        const storiesToRemove = expiredStories ?? [];
-        if (storiesToRemove.length > 0) {
-          const paths = storiesToRemove.map((story) => story.image_path);
-          const ids = storiesToRemove.map((story) => story.id);
-          const { error: removeError } = await admin.storage
-            .from('stories')
-            .remove(paths);
-          if (removeError) throw removeError;
-
-          const { error: deleteError } = await admin
-            .from('stories')
-            .delete()
-            .in('id', ids);
-          if (deleteError) throw deleteError;
-          result.removedStories = ids.length;
-        }
-      } catch (error) {
-        result.errors.push(
-          `No se pudieron limpiar las historias: ${errorMessage(error)}`,
-        );
       }
 
       try {
@@ -105,6 +81,15 @@ export default {
           .limit(10);
         if (error) throw error;
         for (const account of requests ?? []) {
+          // Remove references first; the SQL trigger queues Storage work durably.
+          const { data: stories, error: storiesError } = await admin.from('stories')
+            .select('id').eq('author_id', account.user_id).limit(100);
+          if (storiesError) throw storiesError;
+          if (stories?.length) {
+            const { error } = await admin.from('stories').delete().in('id', stories.map(row => row.id));
+            if (error) throw error;
+            continue;
+          }
           const { data: assets, error: assetsError } = await admin.from('media_assets')
             .select('id').eq('author_id', account.user_id).limit(100);
           if (assetsError) throw assetsError;
@@ -117,27 +102,6 @@ export default {
             .select('id', { count: 'exact', head: true }).eq('author_id', account.user_id);
           if (pendingError) throw pendingError;
           if (pendingMedia) continue;
-          const { data: stories, error: storiesError } = await admin
-            .from('stories')
-            .select('id,image_path')
-            .eq('author_id', account.user_id)
-            .limit(100);
-          if (storiesError) throw storiesError;
-          if (stories?.length) {
-            const { error } = await admin.storage
-              .from('stories')
-              .remove(stories.map((row) => row.image_path));
-            if (error) throw error;
-            const { error: rowError } = await admin
-              .from('stories')
-              .delete()
-              .in(
-                'id',
-                stories.map((row) => row.id),
-              );
-            if (rowError) throw rowError;
-            continue;
-          }
           const { data: avatars, error: avatarError } = await admin.storage
             .from('avatars')
             .list(account.user_id, { limit: 100 });

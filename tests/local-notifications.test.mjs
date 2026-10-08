@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('../src/services/localNotificationDelivery.js', import.meta.url), 'utf8');
+import { readFile } from './support/source.mjs';
+const source = await readFile(new URL('../src/services/localNotificationDelivery.ts', import.meta.url), 'utf8');
 const { createLocalNotificationDelivery } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 function fixture() {

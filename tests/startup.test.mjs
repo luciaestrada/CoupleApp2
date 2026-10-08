@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync } from './support/source.mjs';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
+import { asError } from '../src/utils/errors.ts';
+import { clearAccountContent } from '../src/persistence/storage.ts';
 
 const require = createRequire(import.meta.url);
 const { transformSync } = require('@babel/core');
@@ -57,7 +59,7 @@ test('arranque: carga la aplicación antes de registrarla para conservar las tar
 });
 
 test('arranque: muestra el detalle del fallo de importación o renderizado', () => {
-  const { default: Boundary } = evaluate('../src/components/StartupBoundary.js', {
+  const { default: Boundary } = evaluate('../src/components/StartupBoundary.tsx', {
     react: React,
     'react-native': { ScrollView: 'ScrollView', Text: 'Text', StyleSheet: { create: value => value } },
   });
@@ -84,7 +86,7 @@ test('sesión: un rechazo al recuperar la sesión sale de la carga y expone el e
     useMemo: callback => callback(),
     useEffect: callback => effects.push(callback),
   };
-  const { AuthProvider } = evaluate('../src/context/AuthContext.js', {
+  const { AuthProvider } = evaluate('../src/context/AuthContext.tsx', {
     react,
     'react-native': { Linking: {} },
     '../services/deviceService': {},
@@ -93,6 +95,10 @@ test('sesión: un rechazo al recuperar la sesión sale de la carga y expone el e
     '../features/location/trackingEngine': {},
     '../services/locationTask': {},
     '../services/profileService': {},
+    '../services/chatService': {},
+    '../services/storiesService': {},
+    '../persistence/storage': {},
+    '../utils/errors': { asError },
     '../supabase/client': {
       startSupabaseAuthAutoRefresh: () => () => {},
       supabase: { auth: {
@@ -107,4 +113,41 @@ test('sesión: un rechazo al recuperar la sesión sale de la carga y expone el e
   assert.equal(states[3].value, false, 'Debe finalizar la carga');
   assert.equal(states[4].value, failure, 'Debe mostrar el error recuperable');
   cleanup();
+});
+
+test('cerrar sesión limpia las colas de esa cuenta aunque fallen los servicios nativos', async () => {
+  const values = new Map([
+    ['coupleapp.outbox.user.couple', 'pending'],
+    ['coupleapp.story-upload.user.couple', 'upload'],
+    ['coupleapp.plan-draft.user.couple', 'draft'],
+    ['coupleapp.outbox.other.couple', 'keep'],
+    ['coupleapp.privacy.user', 'keep'],
+  ]);
+  const storage = {
+    get length() { return values.size; }, key: index => [...values.keys()][index] ?? null,
+    getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  let state = 0, invalidated = false, signedOut = false, clearedFiles;
+  const { AuthProvider } = evaluate('../src/context/AuthContext.tsx', {
+    react: { ...React, useState: initial => [state++ === 1 ? { user: { id: 'user' } } : initial, () => {}],
+      useCallback: callback => callback, useMemo: callback => callback(), useEffect: () => {} },
+    'react-native': { Linking: {} },
+    '../services/deviceService': { revokeDevice: async () => {} },
+    '../services/notificationService': { resetPushRegistration() {} },
+    '../services/backgroundNotificationService': { configureBackgroundNotifications: async () => { throw Error('native error'); } },
+    '../features/location/trackingEngine': { stopTracking: async () => {} },
+    '../services/locationTask': { registerGeofences: async () => {} },
+    '../services/profileService': {},
+    '../services/chatService': { invalidateMessageDelivery: () => { invalidated = true; } },
+    '../services/storiesService': { clearStoryFiles: async userId => { clearedFiles = userId; } },
+    '../persistence/storage': { clearAccountContent: userId => clearAccountContent(userId, storage) },
+    '../utils/errors': { asError },
+    '../supabase/client': { supabase: { auth: { signOut: async () => { signedOut = true; return { error: null }; } } } },
+  });
+  await AuthProvider({ children: null }).props.value.signOut();
+  assert.equal(invalidated, true);
+  assert.equal(signedOut, true);
+  assert.equal(clearedFiles, 'user');
+  assert.deepEqual([...values.keys()], ['coupleapp.outbox.other.couple', 'coupleapp.privacy.user']);
 });

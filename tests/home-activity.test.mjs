@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 
-const dateSource = await readFile(new URL('../src/utils/dateUtils.js',import.meta.url),'utf8');
-const activitySource = await readFile(new URL('../src/features/home/activity.js',import.meta.url),'utf8');
+const dateSource = await readFile(new URL('../src/utils/dateUtils.ts',import.meta.url),'utf8');
+const activitySource = await readFile(new URL('../src/features/home/activity.ts',import.meta.url),'utf8');
 const { todayActivity,activityLabel } = await import('data:text/javascript;base64,'+Buffer.from(
   dateSource+'\n'+activitySource.replace(/^import[^;]+;/,'')
 ).toString('base64'));

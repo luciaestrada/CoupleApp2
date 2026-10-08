@@ -55,6 +55,15 @@ try {
       mode: fn.proargmodes?.[index] ?? 'i',
     }));
     const inputs = args.filter((arg) => arg.mode === 'i');
+    // PostgreSQL does not encode argument nullability. These RPCs explicitly
+    // accept null to clear an avatar or save a plan without a scheduled date.
+    const nullable = {
+      update_profile: ['p_avatar_path'],
+      save_couple_plan: ['p_planned_date'],
+    };
+    for (const arg of inputs) {
+      if (nullable[fn.proname]?.includes(arg.name)) arg.type += ' | null';
+    }
     const outputs = args.filter((arg) => ['o', 't'].includes(arg.mode));
     const returns = outputs.length
       ? `{ ${outputs.map((arg) => `${arg.name}: ${arg.type}`).join('; ')} }`

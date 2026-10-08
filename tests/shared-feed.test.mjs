@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import { createDatabase, installDatabase } from './support/database.mjs';
 
 test('registro compartido: amor repetido, avisos por transición, multimedia, batería y recorridos', async()=>{

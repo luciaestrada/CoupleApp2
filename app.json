@@ -40,10 +40,17 @@
         }
       ],
       "./plugins/withLocalIosNotifications",
-      ["expo-notifications", { "enableBackgroundRemoteNotifications": false }],
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
       "expo-sqlite",
       "expo-background-task",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-splash-screen",
+      "expo-video"
     ],
     "extra": {
       "eas": {

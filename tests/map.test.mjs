@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import { Buffer } from 'node:buffer';
 import vm from 'node:vm';
 const asset = await import(
@@ -14,7 +14,7 @@ const asset = await import(
 );
 const source = (
   await readFile(
-    new URL('../src/features/map/mapDocument.js', import.meta.url),
+    new URL('../src/features/map/mapDocument.ts', import.meta.url),
     'utf8',
   )
 ).replace(/^import[^;]+;/, '');

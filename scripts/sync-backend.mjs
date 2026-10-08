@@ -23,6 +23,7 @@ const migrationNames = [
   '20260921000200_checkin_memories.sql',
   '20260921000300_question_memories.sql',
   '20260921000400_memory_highlights.sql',
+  '20261006000100_reliable_stories.sql',
 ];
 const migrations = migrationNames.map(name => readFileSync(`supabase/migrations/${name}`, 'utf8')
   .replace(/^begin;\s*/, '').replace(/commit;\s*$/i, '').trimEnd());

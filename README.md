@@ -10,13 +10,13 @@ actualizaciones no destructivas para instalaciones existentes viven en `supabase
 ## Arquitectura
 
 ```text
-App.js                         composición de providers y efectos de arranque
+App.tsx                        composición de providers y efectos de arranque
 src/config/                    validación estricta del entorno
 src/context/                   sesión y estado de la pareja
-src/contexts/AppContext.js     fachada de estado para las pantallas
+src/contexts/AppContext.ts     fachada de estado para las pantallas
 src/services/                  acceso a datos, comandos RPC y suscripciones Realtime
 src/screens/                   presentación e interacción
-src/supabase/client.js         único cliente Supabase
+src/supabase/client.ts         único cliente Supabase
 supabase/setup.sql             instalador canónico de base de datos
 src/features/location/         políticas, tarea nativa y cola de ubicación
 supabase/functions/push        entrega por dispositivo y receipts Expo
@@ -29,6 +29,11 @@ operaciones.
 
 El inventario anterior se conserva en [`docs/FUNCTIONALITY.md`](docs/FUNCTIONALITY.md).
 Consulta el documento de implementación para el comportamiento y las comprobaciones actuales.
+
+`npm run backend:audit` comprueba Auth, REST y el arranque de los workers del servidor configurado
+en `.env`, sin modificar datos ni invocar trabajos mediante POST. Un 401 en un worker protegido
+es esperado con la clave pública; un 500 indica un fallo de arranque o infraestructura. El acceso
+REST anónimo no verifica las migraciones ni los permisos de una sesión autenticada.
 
 ## Puesta en marcha
 
@@ -49,6 +54,10 @@ La actualización conserva los datos y usa la racha compartida existente como va
 miembro. Después aplica las migraciones pendientes de historial y ubicación/notificaciones; no vuelvas a ejecutar `setup.sql` sobre esa instancia.
 
 ## Configuración móvil
+
+Para reparar los workers de una instalación Linux con Docker Compose, consulta
+[Reparación del servidor](docs/SERVER_REPAIR.md). Genera el paquete con
+`powershell -ExecutionPolicy Bypass -File scripts/package-server.ps1`.
 
 Para generar APK y AAB firmados, consulta [Android release](docs/ANDROID_RELEASE.md).
 Comandos locales: `npm run android:release:apk` y `npm run android:release:aab`.

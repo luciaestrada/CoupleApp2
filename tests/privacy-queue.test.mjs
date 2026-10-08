@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 const { createPrivacyQueue } = await import('data:text/javascript;base64,' + Buffer.from(
-  await readFile(new URL('../src/features/location/privacyQueue.js', import.meta.url), 'utf8'),
+  await readFile(new URL('../src/features/location/privacyQueue.ts', import.meta.url), 'utf8'),
 ).toString('base64'));
 function setup(send) {
   const values = new Map();

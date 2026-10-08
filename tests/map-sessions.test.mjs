@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import { Buffer } from 'node:buffer';
 import { createDatabase, installDatabase } from './support/database.mjs';
 const load = async file => import('data:text/javascript;base64,' + Buffer.from(await readFile(new URL(file, import.meta.url),'utf8')).toString('base64'));
@@ -54,7 +54,7 @@ test('sesiones SQL: consentimiento, pausa, TTL, dispositivos y cierre fuera de o
 });
 
 test('el cierre del mapa vence a una renovación que llega tarde', async () => {
-  const {startMapViewing}=await load('../src/features/location/mapViewing.js');
+  const {startMapViewing}=await load('../src/features/location/mapViewing.ts');
   let resolve,closed=0,updates=0;
   const stop=startMapViewing({renew:()=>new Promise(r=>{resolve=r;}),close:async()=>{closed++;},onState:()=>{updates++;}});
   stop(); resolve({status:'requested'});
@@ -63,7 +63,7 @@ test('el cierre del mapa vence a una renovación que llega tarde', async () => {
 });
 
 test('la predicción visual es acotada y no transforma una posición vieja en actual',async()=>{
-  const {estimatePosition}=await load('../src/features/location/positionEstimate.js');
+  const {estimatePosition}=await load('../src/features/location/positionEstimate.ts');
   const now=Date.now(),p={lat:40,lng:-3,speed:1,heading:90,accuracy:5,updatedAt:new Date(now-10000).toISOString()};
   const projected=estimatePosition(p,now);
   assert.equal(projected.estimated,true); assert.ok(projected.lng>p.lng);
@@ -73,7 +73,7 @@ test('la predicción visual es acotada y no transforma una posición vieja en ac
 });
 
 test('el muestreo cancela el GPS, incluso si el alta del observador termina tarde',async()=>{
-  const {createLiveSampler}=await load('../src/features/location/liveSampler.js');
+  const {createLiveSampler}=await load('../src/features/location/liveSampler.ts');
   let resolve,removed=0;
   const sampler=createLiveSampler({watch:()=>new Promise(r=>{resolve=r;}),onFix:()=>assert.fail(),onError:()=>assert.fail()});
   sampler.remove(); resolve({remove:()=>removed++});

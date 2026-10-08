@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync } from './support/source.mjs';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
 const { transformSync } = createRequire(import.meta.url)('@babel/core');
@@ -16,10 +16,10 @@ function evaluate(path, dependencies, globals = {}) {
     }, ...globals });
   return exports;
 }
-const dateUtils = evaluate('../src/utils/dateUtils.js', {});
-const planner = evaluate('../src/services/localReminderPlanner.js', { '../utils/dateUtils': dateUtils });
-const delivery = evaluate('../src/services/localNotificationDelivery.js', {});
-const diagnosticSource = '../src/services/notificationDiagnostics.js';
+const dateUtils = evaluate('../src/utils/dateUtils.ts', {});
+const planner = evaluate('../src/services/localReminderPlanner.ts', { '../utils/dateUtils': dateUtils });
+const delivery = evaluate('../src/services/localNotificationDelivery.ts', {});
+const diagnosticSource = '../src/services/notificationDiagnostics.ts';
 
 function fixture() {
   const stored = new Map(), shown = [], canceled = [], scheduled = new Map();
@@ -53,7 +53,7 @@ function fixture() {
   const Platform = { OS: 'ios' }, AppState = { currentState: 'background' };
   const navigationRef = { getCurrentRoute: () => ({ name: 'Chat' }) };
   const permission = { getNotificationPermission: async () => ({ granted }) };
-  const service = evaluate('../src/services/localNotificationSync.js', {
+  const service = evaluate('../src/services/localNotificationSync.ts', {
     'expo-notifications': Notifications, 'react-native': { Platform, AppState },
     '../supabase/client': { supabase: { auth, from: query, rpc: () => query('couple') } },
     './permissionService': permission, './localNotificationDelivery': delivery,
@@ -121,7 +121,7 @@ test('tarea nativa: registro sin ubicación, retirada al salir y cancelación po
     addExpirationListener: fn => { expire = fn; return { remove: () => removed++ }; },
   };
   let expires = false;
-  const service = evaluate('../src/services/backgroundNotificationService.js', {
+  const service = evaluate('../src/services/backgroundNotificationService.ts', {
     'expo-background-task': BackgroundTask, 'expo-task-manager': {
       isTaskDefined: () => false, defineTask: (_name, fn) => { callback = fn; }, isTaskRegisteredAsync: async () => registered,
     }, 'react-native': { Platform: { OS: 'ios' } },
@@ -213,7 +213,7 @@ test('diagnóstico: conserva ejecuciones por origen sin guardar contenido ni err
 });
 
 function diagnosticReport({ state, records = {}, granted = false } = {}) {
-  return evaluate('../src/services/backgroundNotificationDiagnostics.js', {
+  return evaluate('../src/services/backgroundNotificationDiagnostics.ts', {
     'expo-background-task': { BackgroundTaskStatus: { Available: 1 }, getStatusAsync: async () => 1 },
     'expo-task-manager': { isTaskRegisteredAsync: async () => true },
     'expo-modules-core': { requireOptionalNativeModule: () => state ? { getBackgroundExecutionStateAsync: async () => state } : null },
@@ -252,7 +252,7 @@ test('diagnóstico: una sincronización en primer plano no acredita ejecución d
 
 test('geofencing: una sesión pendiente no retrasa la consulta de avisos', async () => {
   let callback, release, queries = 0;
-  evaluate('../src/services/locationTask.js', {
+  evaluate('../src/services/locationTask.ts', {
     'expo-location': { GeofencingEventType: { Enter: 1, Exit: 2 } }, 'expo-crypto': {},
     'expo-task-manager': { isTaskDefined: () => false, defineTask: (_name, handler) => { callback = handler; } },
     '../supabase/client': { supabase: { auth: { getSession: () => new Promise(resolve => { release = resolve; }) } } },

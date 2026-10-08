@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 const dataURL = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-const dates = await readFile(new URL('../src/utils/dateUtils.js', import.meta.url), 'utf8');
-const source = (await readFile(new URL('../src/services/localReminderPlanner.js', import.meta.url), 'utf8'))
+const dates = await readFile(new URL('../src/utils/dateUtils.ts', import.meta.url), 'utf8');
+const source = (await readFile(new URL('../src/services/localReminderPlanner.ts', import.meta.url), 'utf8'))
   .replace(/^import .*;\r?\n/gm, '');
 export const planner = await import(dataURL(`const {todayInMadrid}=await import('${dataURL(dates)}');\n${source}`));
 const { planLocalReminders, madridReminderTime, reconcileLocalReminders } = planner;

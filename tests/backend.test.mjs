@@ -1,5 +1,5 @@
 import { createDatabase } from './support/database.mjs';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 

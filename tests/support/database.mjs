@@ -11,7 +11,7 @@ export async function createDatabase() {
       create function extensions.gen_random_uuid() returns uuid language sql as $$ select pg_catalog.gen_random_uuid() $$;
       create function extensions.gen_random_bytes(integer) returns bytea language sql as $$ select decode(substr(md5(random()::text),1,$1*2),'hex') $$;
       create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
-      create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text,metadata jsonb);
+      create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text,metadata jsonb,created_at timestamptz not null default now());
       alter table storage.objects enable row level security;
       create function storage.foldername(text) returns text[] language sql as $$ select string_to_array($1,'/') $$;
       create table cron.job(jobid bigserial,jobname text);

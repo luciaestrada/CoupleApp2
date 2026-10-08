@@ -1,5 +1,18 @@
 {
   "extends": "expo/tsconfig.base",
-  "compilerOptions": {},
-  "exclude": ["supabase/functions"]
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true
+  },
+  "exclude": [
+    "node_modules",
+    "supabase/functions"
+  ],
+  "include": [
+    "App.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/features/map/leafletSource.js"
+  ]
 }

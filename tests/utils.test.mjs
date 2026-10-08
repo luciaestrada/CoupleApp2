@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import test from 'node:test';
 import { Buffer } from 'node:buffer';
 
@@ -10,24 +10,24 @@ async function importSource(path) {
   );
 }
 
-const { haversineDistanceKm } = await importSource('../src/utils/haversine.js');
+const { haversineDistanceKm } = await importSource('../src/utils/haversine.ts');
 const { isIsoDate, parseCalendarDate } = await importSource(
-  '../src/utils/validation.js',
+  '../src/utils/validation.ts',
 );
 const { nextSpecialDate } = await importSource(
-  '../src/utils/specialDateUtils.js',
+  '../src/utils/specialDateUtils.ts',
 );
 const { daysTogether, isStreakBroken, todayInMadrid } = await importSource(
-  '../src/utils/dateUtils.js',
+  '../src/utils/dateUtils.ts',
 );
 const { createRealtimeChannel, uniqueRealtimeChannelName } = await importSource(
-  '../src/utils/realtimeChannel.js',
+  '../src/utils/realtimeChannel.ts',
 );
 const {
   normalizeNotificationPermission,
   normalizePermission,
   permissionNeedsSettings,
-} = await importSource('../src/utils/permissionUtils.js');
+} = await importSource('../src/utils/permissionUtils.ts');
 
 test('isIsoDate acepta fechas reales y rechaza normalizaciones y el año cero', () => {
   assert.equal(isIsoDate('2024-02-29'), true);

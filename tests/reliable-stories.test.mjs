@@ -1,0 +1,67 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { readFile } from './support/source.mjs';
+import { createDatabase, installDatabase } from './support/database.mjs';
+
+test('historias: reintentos, privacidad, cancelación y limpieza duradera', async () => {
+  const db = await createDatabase();
+  try {
+    await installDatabase(db);
+    const migration = await readFile(new URL('../supabase/migrations/20261006000100_reliable_stories.sql', import.meta.url), 'utf8');
+    await db.exec(migration);
+    const a = randomUUID(), b = randomUUID(), stranger = randomUUID();
+    const as = async id => {
+      await db.exec('reset role');
+      await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id]);
+      await db.exec('set role authenticated');
+    };
+    const value = async (sql, args = []) => (await db.query(sql, args)).rows[0].v;
+    for (const id of [a,b,stranger]) await db.query('insert into auth.users values($1,$2,$3)', [id,id+'@test.invalid','{}']);
+    await as(a);
+    const couple = await value('select public.create_couple(current_date) v');
+    await as(b); await db.query('select public.join_couple($1)', [couple.inviteCode]);
+    await as(a);
+    const id = randomUUID();
+    const reserve = id => value("select to_jsonb(public.reserve_story_upload($1,$2,$3,'image','image/jpeg',10)) v", [id,couple.id,a]);
+    const asset = await reserve(id);
+    assert.equal((await reserve(id)).object_path, asset.object_path);
+    await assert.rejects(db.query('select public.publish_story_upload($1,$2,$3,$4)', [id,couple.id,a,'caption']), /no coincide/);
+    await db.exec('reset role');
+    await db.query("insert into storage.objects(bucket_id,name,metadata) values('stories',$1,$2)", [asset.object_path,{size:10,mimetype:'image/jpeg'}]);
+    await as(a);
+    const publish = () => value('select to_jsonb(public.publish_story_upload($1,$2,$3,$4)) v', [id,couple.id,a,'caption']);
+    const first = await publish();
+    assert.equal((await publish()).id, first.id, 'Una respuesta perdida se recupera con el mismo ID');
+    assert.equal(await value('select count(*)::int v from public.stories'),1);
+    assert.equal(await value("select count(*)::int v from public.messages where metadata->>'kind'='story'"),1);
+    await assert.rejects(db.query('select public.cancel_story_upload($1,$2,$3)', [id,couple.id,a]), /publicada/);
+    await as(b);
+    await assert.rejects(db.query('select public.publish_story_upload($1,$2,$3,$4)',[id,couple.id,a,'otra']),/disponible/);
+    await as(stranger);
+    await assert.rejects(db.query('select public.get_story_upload($1,$2,$3)',[id,couple.id,stranger]),/disponible/);
+    await as(a);
+    const cancelled=randomUUID(); await reserve(cancelled);
+    await db.query('select public.cancel_story_upload($1,$2,$3)',[cancelled,couple.id,a]);
+    await assert.rejects(reserve(cancelled),/cancelada/);
+    const abandoned=randomUUID(); const old=await reserve(abandoned);
+    await db.exec('reset role');
+    await db.query("update public.media_assets set expires_at=now()-interval '1 second' where id=$1",[abandoned]);
+    const orphan=`${couple.id}/${a}/1000000000000.jpg`;
+    await db.query("insert into storage.objects(bucket_id,name,created_at) values('stories',$1,now()-interval '49 hours')",[orphan]);
+    await db.query('select public.claim_story_cleanup(100)');
+    assert.equal(await value('select count(*)::int v from public.stories'),1,'No elimina publicaciones vigentes');
+    assert.equal(await value('select count(*)::int v from public.retired_story_paths where object_path=$1',[old.object_path]),1);
+    assert.equal(await value('select count(*)::int v from public.media_deletions where object_path=$1',[orphan]),1);
+    await as(a);
+    await assert.rejects(db.query("select public.create_story_v2($1,'image','')",[orphan]),/retirado/);
+    await db.exec('reset role');
+    await db.query("update public.stories set created_at=now()-interval '25 hours',expires_at=now()-interval '1 hour' where id=$1",[id]);
+    await db.query('select public.claim_story_cleanup(100)');
+    assert.equal(await value('select count(*)::int v from public.stories'),0);
+    assert.equal(await value('select count(*)::int v from public.media_assets where id=$1',[id]),0);
+    assert.equal(await value('select count(*)::int v from public.media_deletions where object_path=$1',[asset.object_path]),1);
+    await db.exec(migration);
+    assert.equal(await value('select count(*)::int v from public.messages'),1,'Reaplicar conserva contenido');
+  } finally { await db.close(); }
+});

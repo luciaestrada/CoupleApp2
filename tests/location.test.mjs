@@ -1,11 +1,11 @@
 import test from 'node:test';
 import { Buffer } from 'node:buffer';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import { randomUUID } from 'node:crypto';
 
 const policySource = await readFile(
-  new URL('../src/features/location/policy.js', import.meta.url),
+  new URL('../src/features/location/policy.ts', import.meta.url),
   'utf8',
 );
 const { effectiveMode, shouldPublish, locationAgeLabel } = await import(
@@ -192,7 +192,7 @@ test('motor: una pausa cancela la publicación pendiente y persiste aunque no ha
   };
   const source = (
     await readFile(
-      new URL('../src/features/location/trackingEngine.js', import.meta.url),
+      new URL('../src/features/location/trackingEngine.ts', import.meta.url),
       'utf8',
     )
   ).replace(/^import .*;\r?\n/gm, '');
@@ -364,7 +364,7 @@ test('geofences: no consulta servicios nativos sin permiso permanente y se recup
   };
   const source = (
     await readFile(
-      new URL('../src/services/locationTask.js', import.meta.url),
+      new URL('../src/services/locationTask.ts', import.meta.url),
       'utf8',
     )
   ).replace(/^import .*;\r?\n/gm, '');

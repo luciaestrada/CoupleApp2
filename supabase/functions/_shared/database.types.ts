@@ -916,6 +916,21 @@ export type Database = { public: { Tables: {
     };
     Relationships: [];
   };
+  retired_story_paths: {
+    Row: {
+      object_path: string;
+      retired_at: string;
+    };
+    Insert: {
+      object_path: string;
+      retired_at?: string;
+    };
+    Update: {
+      object_path?: string;
+      retired_at?: string;
+    };
+    Relationships: [];
+  };
   special_dates: {
     Row: {
       id: string;
@@ -959,6 +974,7 @@ export type Database = { public: { Tables: {
       expires_at: string;
       media_type: string;
       caption: string;
+      media_asset_id: string | null;
     };
     Insert: {
       id?: string;
@@ -969,6 +985,7 @@ export type Database = { public: { Tables: {
       expires_at?: string;
       media_type?: string;
       caption?: string;
+      media_asset_id?: string | null;
     };
     Update: {
       id?: string;
@@ -979,6 +996,7 @@ export type Database = { public: { Tables: {
       expires_at?: string;
       media_type?: string;
       caption?: string;
+      media_asset_id?: string | null;
     };
     Relationships: [];
   };
@@ -1100,8 +1118,10 @@ export type Database = { public: { Tables: {
   answer_daily_question: { Args: { p_question_id: string; p_answer: string; p_expected_version: number }; Returns: undefined };
   cancel_media_upload: { Args: { p_id: string }; Returns: undefined };
   cancel_pending_couple: { Args: {  }; Returns: undefined };
+  cancel_story_upload: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string }; Returns: undefined };
   claim_pending_notifications: { Args: { p_limit?: number }; Returns: { id: string; user_id: string; title: string; body: string; attempt_count: number }[] };
   claim_push_deliveries: { Args: { p_limit?: number }; Returns: { id: string; lease_id: string; push_token: string; title: string; body: string; kind: string; data: Json; attempt_count: number; expires_at: string }[] };
+  claim_story_cleanup: { Args: { p_limit?: number }; Returns: number };
   cleanup_location_history: { Args: {  }; Returns: number };
   clear_daily_checkin: { Args: { p_checkin_id: string }; Returns: undefined };
   clear_location_history: { Args: {  }; Returns: undefined };
@@ -1120,6 +1140,7 @@ export type Database = { public: { Tables: {
   get_daily_question: { Args: { p_category?: string }; Returns: Database['public']['Tables']['couple_daily_questions']['Row'] };
   get_my_couple: { Args: {  }; Returns: Json };
   get_question_preferences: { Args: {  }; Returns: Json };
+  get_story_upload: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string }; Returns: Database['public']['Tables']['media_assets']['Row'] };
   get_tracking_config: { Args: { p_device_id: string }; Returns: Json };
   invoke_maintenance_worker: { Args: {  }; Returns: number };
   invoke_push_worker: { Args: {  }; Returns: number };
@@ -1132,6 +1153,7 @@ export type Database = { public: { Tables: {
   publish_location: { Args: { p_lat: number; p_lng: number }; Returns: undefined };
   publish_location_fix: { Args: { p_sample: Json }; Returns: boolean };
   publish_location_sample: { Args: { p_sample: Json }; Returns: boolean };
+  publish_story_upload: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string; p_caption: string }; Returns: Database['public']['Tables']['stories']['Row'] };
   question_category_enabled: { Args: { p_couple_id: string; p_category: string }; Returns: boolean };
   queue_special_date_notifications: { Args: {  }; Returns: number };
   record_geofence_entry: { Args: { p_geofence_id: string }; Returns: string };
@@ -1146,12 +1168,13 @@ export type Database = { public: { Tables: {
   request_account_deletion: { Args: {  }; Returns: undefined };
   request_live_location: { Args: {  }; Returns: string };
   reserve_media_upload: { Args: { p_id: string; p_purpose: string; p_kind: string; p_mime: string; p_bytes: number }; Returns: Database['public']['Tables']['media_assets']['Row'] };
+  reserve_story_upload: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string; p_kind: string; p_mime: string; p_bytes: number }; Returns: Database['public']['Tables']['media_assets']['Row'] };
   reset_broken_streaks: { Args: {  }; Returns: undefined };
   respond_daily_checkin: { Args: { p_checkin_id: string; p_text: string }; Returns: undefined };
   respond_live_location: { Args: { p_id: string; p_accept: boolean; p_device_id: string }; Returns: undefined };
   revoke_device: { Args: { p_device_id: string }; Returns: undefined };
   save_behavior_options: { Args: { p_location?: Json; p_events?: Json }; Returns: Database['public']['Tables']['user_settings']['Row'] };
-  save_couple_plan: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string; p_expected_version: number; p_title: string; p_category: string; p_note: string; p_link: string; p_planned_date: string; p_status: string }; Returns: Database['public']['Tables']['couple_plans']['Row'] };
+  save_couple_plan: { Args: { p_id: string; p_couple_id: string; p_expected_user_id: string; p_expected_version: number; p_title: string; p_category: string; p_note: string; p_link: string; p_planned_date: string | null; p_status: string }; Returns: Database['public']['Tables']['couple_plans']['Row'] };
   save_daily_checkin: { Args: { p_mood: string; p_energy: number; p_phrase: string }; Returns: Database['public']['Tables']['daily_checkins']['Row'] };
   save_settings: { Args: { p_settings: Json; p_device_id: string }; Returns: Database['public']['Tables']['user_settings']['Row'] };
   send_affection: { Args: { p_couple_id: string; p_client_id: string; p_kind: string }; Returns: Json };
@@ -1169,7 +1192,8 @@ export type Database = { public: { Tables: {
   set_status: { Args: { p_text: string; p_emoji: string }; Returns: undefined };
   shares_couple: { Args: { p_other_user_id: string }; Returns: boolean };
   skip_daily_question: { Args: { p_question_id: string; p_skip: boolean }; Returns: undefined };
+  story_path_available: { Args: { p_path: string }; Returns: boolean };
   try_uuid: { Args: { p_value: string }; Returns: string };
-  update_profile: { Args: { p_name: string; p_avatar_path?: string }; Returns: undefined };
+  update_profile: { Args: { p_name: string; p_avatar_path?: string | null }; Returns: undefined };
   uses_approximate_sharing: { Args: { p_user_id: string }; Returns: boolean };
 }; Enums: Record<never, never>; CompositeTypes: Record<never, never> } };

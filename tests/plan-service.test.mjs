@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import {randomUUID} from 'node:crypto';
-const source=(await readFile(new URL('../src/services/planService.js',import.meta.url),'utf8'))
+const source=(await readFile(new URL('../src/services/planService.ts',import.meta.url),'utf8'))
   .replace(/^import[^;]+;\s*/gm,'').replace(/^export /gm,'');
-const validation=await import('data:text/javascript;base64,'+Buffer.from(await readFile(new URL('../src/utils/validation.js',import.meta.url),'utf8')).toString('base64'));
+const validation=await import('data:text/javascript;base64,'+Buffer.from(await readFile(new URL('../src/utils/validation.ts',import.meta.url),'utf8')).toString('base64'));
 
 test('planes cliente: borrador por cuenta/pareja y UUID estable tras fallo de red',async()=>{
   const values=new Map(),calls=[];

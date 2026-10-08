@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 
-const source=(await readFile(new URL('../src/services/realtimeService.js',import.meta.url),'utf8'))
+const source=(await readFile(new URL('../src/services/realtimeService.ts',import.meta.url),'utf8'))
   .replace(/^import[^;]+;\s*/gm,'').replace('export function watchQuery','function watchQuery');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 

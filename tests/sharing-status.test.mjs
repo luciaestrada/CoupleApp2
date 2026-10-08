@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 const load = async path => import('data:text/javascript;base64,' + Buffer.from(await readFile(new URL(path, import.meta.url), 'utf8')).toString('base64'));
-const { sharingStatus } = await load('../src/features/location/sharingStatus.js');
-const { normalizePermission } = await load('../src/utils/permissionUtils.js');
+const { sharingStatus } = await load('../src/features/location/sharingStatus.ts');
+const { normalizePermission } = await load('../src/utils/permissionUtils.ts');
 const base = {
   settings: { location_mode: 'balanced', tracking_device_id: 'phone', background_enabled: true,
     history_enabled: true, auto_live_enabled: true },

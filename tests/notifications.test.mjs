@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile } from './support/source.mjs';
 import { Buffer } from 'node:buffer';
 
 test('push: los fallos se reflejan en Ajustes y revocar permisos no queda bloqueado por el reintento', async () => {
@@ -19,7 +19,7 @@ test('push: los fallos se reflejan en Ajustes y revocar permisos no queda bloque
     registerDevice: async (token) => { tokens.push(token); }, navigationRef: {}, watchQuery: () => {},
     configureBackgroundNotifications: async () => {},
   };
-  const source = (await readFile(new URL('../src/services/notificationService.js', import.meta.url), 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\r?\n/gm, '');
+  const source = (await readFile(new URL('../src/services/notificationService.ts', import.meta.url), 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\r?\n/gm, '');
   const service = await import(`data:text/javascript;base64,${Buffer.from('const {Notifications,Constants,AppState,Platform,supabase,getNotificationPermission,requestNotificationPermission,registerDevice,navigationRef,watchQuery,configureBackgroundNotifications}=globalThis.__pushTest;\n'+source).toString('base64')}`);
   const unsubscribe = service.watchPushStatus((state) => states.push(state.status));
   try {

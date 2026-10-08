@@ -40,7 +40,7 @@ if (!sqlFiles.includes(setupPath) || unexpectedSqlFiles.length > 0) {
 
 const setupSql = readFileSync(setupPath, 'utf8');
 const sourceFiles = walk(join(root, 'src')).filter((file) =>
-  /\.(js|ts)$/.test(file),
+  /\.(js|jsx|ts|tsx)$/.test(file),
 );
 const source = sourceFiles.map((file) => readFileSync(file, 'utf8')).join('\n');
 const edgeFunctionFiles = walk(join(root, 'supabase', 'functions')).filter(
@@ -164,7 +164,7 @@ if (
 }
 
 const appNavigator = readFileSync(
-  join(root, 'src', 'navigation', 'AppNavigator.js'),
+  join(root, 'src', 'navigation', 'AppNavigator.tsx'),
   'utf8',
 );
 requireText(
@@ -174,11 +174,11 @@ requireText(
 );
 
 const realtimeService = readFileSync(
-  join(root, 'src', 'services', 'realtimeService.js'),
+  join(root, 'src', 'services', 'realtimeService.ts'),
   'utf8',
 );
 const coupleService = readFileSync(
-  join(root, 'src', 'services', 'coupleService.js'),
+  join(root, 'src', 'services', 'coupleService.ts'),
   'utf8',
 );
 requireText(
@@ -193,7 +193,7 @@ requireText(
 );
 
 const chatScreen = readFileSync(
-  join(root, 'src', 'screens', 'ChatScreen.js'),
+  join(root, 'src', 'screens', 'ChatScreen.tsx'),
   'utf8',
 );
 requireText(
@@ -264,7 +264,7 @@ if (
   );
 }
 const streakService = readFileSync(
-  join(root, 'src', 'services', 'streakService.js'),
+  join(root, 'src', 'services', 'streakService.ts'),
   'utf8',
 );
 requireText(
@@ -277,7 +277,7 @@ const permissionServicePath = join(
   root,
   'src',
   'services',
-  'permissionService.js',
+  'permissionService.ts',
 );
 for (const file of sourceFiles) {
   if (file === permissionServicePath) continue;
@@ -293,7 +293,7 @@ for (const file of sourceFiles) {
   }
 }
 const settingsScreen = readFileSync(
-  join(root, 'src', 'screens', 'SettingsScreen.js'),
+  join(root, 'src', 'screens', 'SettingsScreen.tsx'),
   'utf8',
 );
 requireText(
@@ -328,13 +328,13 @@ if (!appConfig.expo.plugins.includes('expo-background-task') ||
     !appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes('location') ||
     appConfig.expo.ios?.infoPlist?.UIBackgroundModes?.includes('remote-notification'))
   fail('iOS debe declarar ubicación y tareas de fondo sin depender de APNs.');
-requireText(readFileSync(join(root,'src/services/backgroundNotificationService.js'),'utf8'),
+requireText(readFileSync(join(root,'src/services/backgroundNotificationService.ts'),'utf8'),
   'syncTrackingConfig', 'La tarea de fondo iOS debe revalidar también las solicitudes del mapa.');
-requireText(readFileSync(join(root,'src/features/location/trackingWake.js'),'utf8'),
+requireText(readFileSync(join(root,'src/features/location/trackingWake.ts'),'utf8'),
   'syncTrackingConfig', 'Los avisos de control deben revalidar la sesión en el servidor.');
 
 const specialDatesScreen = readFileSync(
-  join(root, 'src', 'screens', 'SpecialDatesScreen.js'),
+  join(root, 'src', 'screens', 'SpecialDatesScreen.tsx'),
   'utf8',
 );
 requireText(
@@ -354,7 +354,7 @@ requireText(
 );
 
 const statusScreen = readFileSync(
-  join(root, 'src', 'screens', 'StatusScreen.js'),
+  join(root, 'src', 'screens', 'StatusScreen.tsx'),
   'utf8',
 );
 requireText(
@@ -362,11 +362,11 @@ requireText(
   'CheckinCard',
   'el estado debe compartir el editor de check-in.',
 );
-requireText(readFileSync(join(root, 'src', 'ui', 'CheckinCard.js'), 'utf8'),
+requireText(readFileSync(join(root, 'src', 'ui', 'CheckinCard.tsx'), 'utf8'),
   'clearCheckin', 'la interfaz debe permitir retirar el check-in propio.');
 
 const geofenceScreen = readFileSync(
-  join(root, 'src', 'screens', 'GeofenceSetupScreen.js'),
+  join(root, 'src', 'screens', 'GeofenceSetupScreen.tsx'),
   'utf8',
 );
 requireText(
@@ -375,7 +375,7 @@ requireText(
   'la interfaz debe permitir eliminar un geofence.',
 );
 
-const appEntry = readFileSync(join(root, 'App.js'), 'utf8');
+const appEntry = readFileSync(join(root, 'App.tsx'), 'utf8');
 requireText(
   appEntry,
   'startGeofenceSync',
