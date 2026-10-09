@@ -7,6 +7,7 @@ import { syncTrackingConfig } from '../features/location/trackingEngine';
 import { notificationFailureReason, recordNotificationDiagnostic } from './notificationDiagnostics';
 
 export const NOTIFICATION_SYNC_TASK = 'COUPLEAPP_NOTIFICATION_SYNC_V1';
+export const NOTIFICATION_SYNC_INTERVAL_MINUTES = 3;
 let configuration = Promise.resolve();
 
 // Background launches load this definition without mounting any screen.
@@ -43,7 +44,7 @@ export function configureBackgroundNotifications(userId) {
   const configure = async () => {
     if (cleanup) await cleanup;
     if (localNotificationUser() !== userId) return;
-    const registered = await TaskManager.isTaskRegisteredAsync(NOTIFICATION_SYNC_TASK);
+    let registered = await TaskManager.isTaskRegisteredAsync(NOTIFICATION_SYNC_TASK);
     const granted = userId && (await getNotificationPermission()).granted;
     if (localNotificationUser() !== userId) return;
     if (!granted) {
@@ -53,8 +54,19 @@ export function configureBackgroundNotifications(userId) {
       return;
     }
     if (await BackgroundTask.getStatusAsync() === BackgroundTask.BackgroundTaskStatus.Available) {
-      if (!registered) await BackgroundTask.registerTaskAsync(NOTIFICATION_SYNC_TASK, { minimumInterval: 15 });
+      const options = registered ? await TaskManager.getTaskOptionsAsync<BackgroundTask.BackgroundTaskOptions | null>(NOTIFICATION_SYNC_TASK) : null;
+      if (localNotificationUser() !== userId) return;
+      // Expo skips registration when the name already exists. Replace an old
+      // interval once so installed apps adopt the new request without reinstalling.
+      if (registered && options?.minimumInterval !== NOTIFICATION_SYNC_INTERVAL_MINUTES) {
+        await BackgroundTask.unregisterTaskAsync(NOTIFICATION_SYNC_TASK);
+        registered = false;
+      }
+      if (localNotificationUser() !== userId) return;
+      if (!registered) await BackgroundTask.registerTaskAsync(NOTIFICATION_SYNC_TASK, { minimumInterval: NOTIFICATION_SYNC_INTERVAL_MINUTES });
       if (!(await TaskManager.isTaskRegisteredAsync(NOTIFICATION_SYNC_TASK))) throw new Error('Background task not configured');
+      const effectiveOptions = await TaskManager.getTaskOptionsAsync<BackgroundTask.BackgroundTaskOptions | null>(NOTIFICATION_SYNC_TASK);
+      if (effectiveOptions?.minimumInterval !== NOTIFICATION_SYNC_INTERVAL_MINUTES) throw new Error('Background task interval not configured');
       recordNotificationDiagnostic(userId, 'registration', 'registered');
     } else recordNotificationDiagnostic(userId, 'registration', 'restricted');
   };

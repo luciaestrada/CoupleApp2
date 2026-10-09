@@ -38,6 +38,10 @@ export async function getBackgroundNotificationReport() {
       BackgroundTask.getStatusAsync(), TaskManager.isTaskRegisteredAsync(NOTIFICATION_SYNC_TASK),
     ]);
     lines.push(`Tarea periódica: ${registered ? 'registrada' : 'sin registrar'}.`);
+    if (registered) {
+      const options = await TaskManager.getTaskOptionsAsync<BackgroundTask.BackgroundTaskOptions | null>(NOTIFICATION_SYNC_TASK);
+      if (typeof options?.minimumInterval === 'number') lines.push(`Intervalo solicitado a iOS: ${options.minimumInterval} minutos. La ejecución puede retrasarse.`);
+    }
     if (status !== BackgroundTask.BackgroundTaskStatus.Available) lines.push('El servicio de tareas de fondo no está disponible.');
   } catch { lines.push('No se pudo comprobar el servicio nativo. Instala una nueva compilación y comprueba los permisos.'); }
   try {

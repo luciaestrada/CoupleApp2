@@ -21,7 +21,7 @@ const planner = evaluate('../src/services/localReminderPlanner.ts', { '../utils/
 const delivery = evaluate('../src/services/localNotificationDelivery.ts', {});
 const diagnosticSource = '../src/services/notificationDiagnostics.ts';
 
-function fixture() {
+function fixture({ clock = Date } = {}) {
   const stored = new Map(), shown = [], canceled = [], scheduled = new Map();
   let user = 'u', granted = true, beforeQuery = async () => {}, sessionLoader, settings = {
     notifications_enabled: true, chat_enabled: true, dates_enabled: true, preview_enabled: false,
@@ -60,7 +60,7 @@ function fixture() {
     './localReminderPlanner': planner, '../utils/dateUtils': dateUtils,
     './notificationDiagnostics': evaluate(diagnosticSource, {}, { localStorage: storage }),
     '../navigation/navigationService': { navigationRef },
-  }, { localStorage: storage });
+  }, { localStorage: storage, Date: clock });
   service.setLocalNotificationUser('u');
   return { service, shown, canceled, scheduled, tables, Platform, AppState, permission,
     setUser: value => user = value, setGranted: value => granted = value,
@@ -110,20 +110,37 @@ test('segundo plano: Android conserva su transporte y no consulta el servicio iO
   assert.equal(f.shown.length, 0);
 });
 
+test('ubicación: consulta a los 30 segundos, limita eventos frecuentes y conserva deduplicación', async () => {
+  let at = Date.now(), queries = 0;
+  class Clock extends Date { static now() { return at; } }
+  const f = fixture({ clock: Clock });
+  f.setQuery(async table => { if (table === 'notifications') queries++; });
+  await f.service.syncLocalNotifications({ source: 'location' });
+  assert.equal(queries, 1);
+  at += 29_999;
+  await f.service.syncLocalNotifications({ source: 'location' });
+  assert.equal(queries, 1, 'Los eventos anteriores al límite no vuelven a consultar');
+  at++;
+  await f.service.syncLocalNotifications({ source: 'location' });
+  assert.equal(queries, 2, 'A los 30 segundos ya se permiten nuevos avisos');
+  assert.equal(f.shown.length, 1, 'No repite un aviso durante la siguiente consulta');
+});
+
 test('tarea nativa: registro sin ubicación, retirada al salir y cancelación por expiración', async () => {
-  let owner, registered = false, callback, expire, interruptions = 0, clear = 0, removed = 0;
+  let owner, registered = false, options, callback, expire, interruptions = 0, clear = 0, removed = 0, unregistered = 0;
   const calls = [];
   const BackgroundTask = {
     BackgroundTaskResult: { Success: 1, Failed: 2 }, BackgroundTaskStatus: { Available: 1 },
     getStatusAsync: async () => 1,
-    registerTaskAsync: async (_name, options) => { registered = true; calls.push(options); },
-    unregisterTaskAsync: async () => { registered = false; },
+    registerTaskAsync: async (_name, value) => { registered = true; options = value; calls.push(value); },
+    unregisterTaskAsync: async () => { registered = false; options = null; unregistered++; },
     addExpirationListener: fn => { expire = fn; return { remove: () => removed++ }; },
   };
   let expires = false;
   const service = evaluate('../src/services/backgroundNotificationService.ts', {
     'expo-background-task': BackgroundTask, 'expo-task-manager': {
       isTaskDefined: () => false, defineTask: (_name, fn) => { callback = fn; }, isTaskRegisteredAsync: async () => registered,
+      getTaskOptionsAsync: async () => options,
     }, 'react-native': { Platform: { OS: 'ios' } },
     './permissionService': { getNotificationPermission: async () => ({ granted: true }) },
     '../features/location/trackingEngine': { syncTrackingConfig: async () => {} },
@@ -136,9 +153,15 @@ test('tarea nativa: registro sin ubicación, retirada al salir y cancelación po
   });
   assert.equal(typeof callback, 'function', 'Definida antes de montar pantallas');
   await service.configureBackgroundNotifications('u');
-  assert.equal(calls[0].minimumInterval, 15);
+  assert.equal(calls[0].minimumInterval, 3);
   await service.configureBackgroundNotifications('u');
   assert.equal(calls.length, 1);
+  assert.equal(unregistered, 0, 'No reinicia una tarea con el intervalo correcto');
+  options = { minimumInterval: 15 };
+  await Promise.all([service.configureBackgroundNotifications('u'), service.configureBackgroundNotifications('u')]);
+  assert.equal(unregistered, 1, 'Retira el intervalo persistido de una instalación anterior una sola vez');
+  assert.equal(calls.length, 2);
+  assert.equal(options.minimumInterval, 3, 'La instalación anterior adopta el intervalo nuevo');
   assert.equal(await callback({}), 1);
   expires = true;
   assert.equal(await callback({}), 2);
@@ -147,6 +170,35 @@ test('tarea nativa: registro sin ubicación, retirada al salir y cancelación po
   await service.configureBackgroundNotifications(null);
   assert.equal(registered, false);
   assert.equal(clear, 2);
+});
+
+test('tarea nativa: un fallo al cambiar el intervalo se recupera en la siguiente configuración', async () => {
+  let owner = 'u', registered = true, options = { minimumInterval: 15 }, fail = true;
+  const service = evaluate('../src/services/backgroundNotificationService.ts', {
+    'expo-background-task': {
+      BackgroundTaskStatus: { Available: 1 }, getStatusAsync: async () => 1,
+      unregisterTaskAsync: async () => { registered = false; options = null; },
+      registerTaskAsync: async (_task, next) => {
+        if (fail) throw new Error('Native registration failed');
+        registered = true; options = next;
+      },
+    },
+    'expo-task-manager': { isTaskDefined: () => true, isTaskRegisteredAsync: async () => registered, getTaskOptionsAsync: async () => options },
+    'react-native': { Platform: { OS: 'ios' } },
+    './permissionService': { getNotificationPermission: async () => ({ granted: true }) },
+    '../features/location/trackingEngine': { syncTrackingConfig: async () => {} },
+    './notificationDiagnostics': { recordNotificationDiagnostic: () => {}, notificationFailureReason: () => 'unknown' },
+    './localNotificationSync': {
+      localNotificationUser: () => owner, setLocalNotificationUser: value => owner = value,
+      clearLocalReminders: async () => {}, interruptLocalNotificationSync: () => {}, syncLocalNotifications: async () => {},
+    },
+  });
+  await assert.rejects(service.configureBackgroundNotifications('u'), /Native registration failed/);
+  assert.equal(registered, false);
+  fail = false;
+  await service.configureBackgroundNotifications('u');
+  assert.equal(registered, true);
+  assert.equal(options.minimumInterval, 3);
 });
 
 test('segundo plano: presenta mensajes antes de consultar planes y no falla por su indisponibilidad', async () => {
@@ -212,10 +264,10 @@ test('diagnóstico: conserva ejecuciones por origen sin guardar contenido ni err
   assert.deepEqual(Object.keys(f.diagnostics.readNotificationDiagnostics('other')), []);
 });
 
-function diagnosticReport({ state, records = {}, granted = false } = {}) {
+function diagnosticReport({ state, records = {}, granted = false, interval = 3 } = {}) {
   return evaluate('../src/services/backgroundNotificationDiagnostics.ts', {
     'expo-background-task': { BackgroundTaskStatus: { Available: 1 }, getStatusAsync: async () => 1 },
-    'expo-task-manager': { isTaskRegisteredAsync: async () => true },
+    'expo-task-manager': { isTaskRegisteredAsync: async () => true, getTaskOptionsAsync: async () => ({ minimumInterval: interval }) },
     'expo-modules-core': { requireOptionalNativeModule: () => state ? { getBackgroundExecutionStateAsync: async () => state } : null },
     'react-native': { Platform: { OS: 'ios' } },
     './backgroundNotificationService': { NOTIFICATION_SYNC_TASK: 'notifications' },
@@ -239,6 +291,7 @@ test('diagnóstico: detecta configuración nativa ausente, restricciones y permi
   assert.match(report, /bajo consumo/);
   assert.match(report, /iPhone físico/);
   assert.match(report, /sin permiso permanente/);
+  assert.match(report, /Intervalo solicitado a iOS: 3 minutos/);
 });
 
 test('diagnóstico: una sincronización en primer plano no acredita ejecución de fondo', async () => {
@@ -248,6 +301,8 @@ test('diagnóstico: una sincronización en primer plano no acredita ejecución d
   assert.match(report, /Última activación de la tarea periódica: Todavía no consta/);
   assert.match(report, /Última consulta por ubicación con la app en segundo plano: Todavía no consta/);
   assert.match(report, /Última consulta completada por tarea periódica: Todavía no consta/);
+  const previousInstallation = await diagnosticReport({ interval: 15 }).getBackgroundNotificationReport();
+  assert.match(previousInstallation, /Intervalo solicitado a iOS: 15 minutos/, 'Muestra el registro real aunque todavía tenga el intervalo anterior');
 });
 
 test('geofencing: una sesión pendiente no retrasa la consulta de avisos', async () => {

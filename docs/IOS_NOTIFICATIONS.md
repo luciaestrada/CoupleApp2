@@ -22,13 +22,16 @@ consulta cada 30 segundos recupera eventos si el canal falla, con la app activa.
 
 La tarea `COUPLEAPP_NOTIFICATION_SYNC_V1` se define al cargar el módulo, antes
 de montar pantallas, y se registra para la cuenta autenticada con permiso de
-notificaciones. Solicita un intervalo mínimo de 15 minutos; iOS decide cuándo
+notificaciones. Solicita un intervalo de 3 minutos; iOS decide cuándo
 ejecutarla y puede retrasarla considerablemente. No necesita activar la ubicación.
+Al abrir la versión actualizada se comprueban las opciones guardadas; si la tarea
+todavía tiene el intervalo anterior de 15 minutos, se retira y vuelve a registrar
+con 3 minutos. Un registro que ya tiene 3 minutos se conserva.
 También revalida las solicitudes del mapa con `syncTrackingConfig` sin otorgar
 consentimiento ni iniciar seguimiento si falta una configuración autorizada.
 
 Las tareas de ubicación y geofencing consultan los avisos en paralelo al procesamiento
-de sus eventos reales. Estas consultas se limitan a una por minuto; no modifican
+de sus eventos reales. Estas consultas se limitan a una cada 30 segundos; no modifican
 frecuencia, precisión ni pausa del GPS. Los tres ejecutores comparten una cola,
 estado persistente por cuenta y deduplicación. Las consultas de datos tienen
 cancelación por plazo y la tarea de fondo atiende la expiración del sistema.
@@ -125,7 +128,8 @@ y [Expo BackgroundTask](https://docs.expo.dev/versions/latest/sdk/background-tas
 
 Ajustes → Notificaciones → «Diagnosticar segundo plano» muestra el permiso de
 ubicación permanente, el registro del seguimiento y de las zonas, la tarea
-periódica y las últimas consultas completadas por cada origen. Para ubicación se
+periódica, su intervalo solicitado al sistema y las últimas consultas completadas
+por cada origen. Para ubicación se
 muestran las completadas con la app en segundo plano; una consulta con la app
 activa no acredita ejecución de fondo. El historial de
 diagnóstico se guarda por cuenta, sin contenido de mensajes, tokens ni errores
@@ -143,7 +147,9 @@ puede pausar actualizaciones estando quieto o diferir lotes hasta cumplir sus
 umbrales de tiempo y distancia; no funciona como un temporizador de mensajes.
 El informe distingue ausencia de oportunidades de ejecución de errores de
 sesión, permisos, conexión, tiempo o tablas del servidor. Una tarea periódica
-puede tardar horas en ejecutarse; 15 minutos es un mínimo solicitado.
+puede tardar horas en ejecutarse; los 3 minutos son una solicitud, no una frecuencia
+garantizada. El límite de 30 segundos solo permite aprovechar actualizaciones de
+ubicación que ya se produzcan; no provoca un evento ni despierta la app por sí mismo.
 
 ## Validación local
 

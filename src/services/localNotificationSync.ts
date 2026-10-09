@@ -9,6 +9,7 @@ import { notificationFailureReason, recordNotificationDiagnostic } from './notif
 import { navigationRef } from '../navigation/navigationService';
 
 const OWNER_KEY = 'coupleapp.notifications.owner';
+const LOCATION_SYNC_INTERVAL_MS = 30_000;
 let revision = 0;
 let serial = Promise.resolve();
 let lastLocationSync = 0;
@@ -63,7 +64,7 @@ export function clearLocalReminders() {
 export function syncLocalNotifications({ source = 'foreground', userId = localNotificationUser(), isCurrent = () => true, currentRoute = () => navigationRef.getCurrentRoute()?.name } = {}) {
   if (Platform.OS !== 'ios' || !userId || userId !== localNotificationUser()) return Promise.resolve();
   if (source === 'location') {
-    if (Date.now() - lastLocationSync < 60000) return Promise.resolve();
+    if (Date.now() - lastLocationSync < LOCATION_SYNC_INTERVAL_MS) return Promise.resolve();
     lastLocationSync = Date.now();
   }
   const generation = revision;
