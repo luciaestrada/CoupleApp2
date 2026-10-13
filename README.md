@@ -72,5 +72,16 @@ Los permisos no se solicitan al arrancar. Se activan desde la función correspon
 panel de `Cuenta`, que distingue una denegación recuperable de un permiso bloqueado y, en este
 último caso, abre los Ajustes de la aplicación.
 
+## Widgets de inicio
+
+CoupleApp ofrece cinco widgets nativos para iOS y Android: resumen de pareja, días y rachas,
+pregunta y estado del check-in, distancia aproximada de la pareja y cuenta atrás del próximo
+evento. El contador utiliza las fechas que se añaden en **Días que importan**. El widget de
+ubicación no muestra coordenadas y oculta la distancia cuando la posición deja de ser reciente.
+
+Los widgets necesitan una nueva compilación nativa y no están disponibles en Expo Go. Añádelos
+desde la galería de widgets del sistema; los cambios de datos se publican al abrir la pantalla
+principal y el sistema operativo decide cuándo actualizar cada widget.
+
 Las variables `EXPO_PUBLIC_*` forman parte de la aplicación compilada. Solo deben contener la URL y
 una clave `sb_publishable_...`; nunca una clave `sb_secret_...`.

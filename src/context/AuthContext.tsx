@@ -17,6 +17,7 @@ import { getProfile, watchProfile } from '../services/profileService';
 import { invalidateMessageDelivery } from '../services/chatService';
 import { clearStoryFiles } from '../services/storiesService';
 import { clearAccountContent } from '../persistence/storage';
+import { clearWidgetSnapshot } from '../features/widgets/publishWidgets';
 import { asError, type AppError } from '../utils/errors';
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile } from '../types/domain';
@@ -196,6 +197,8 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     let storageError: unknown = null;
     try { if (userId) clearAccountContent(userId); }
     catch (error) { storageError = error; }
+    try { await clearWidgetSnapshot(); }
+    catch (error) { storageError ??= error; }
     await Promise.allSettled([
       configureBackgroundNotifications(null), stopTracking(), registerGeofences([]),
       ...(userId ? [clearStoryFiles(userId)] : []),

@@ -50,7 +50,106 @@
       "expo-background-task",
       "expo-status-bar",
       "expo-splash-screen",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-widgets",
+        {
+          "widgets": [
+            {
+              "name": "CoupleOverviewWidget",
+              "displayName": "Resumen de pareja",
+              "description": "Días juntos, racha y pregunta del día",
+              "ios": {
+                "supportedFamilies": ["systemSmall", "systemMedium"]
+              }
+            },
+            {
+              "name": "CoupleDaysWidget",
+              "displayName": "Días y rachas",
+              "description": "Días juntos y rachas de ambos",
+              "ios": {
+                "supportedFamilies": ["systemSmall", "systemMedium"]
+              }
+            },
+            {
+              "name": "CoupleQuestionWidget",
+              "displayName": "Pregunta y check-in",
+              "description": "La pregunta diaria y el estado del check-in",
+              "ios": {
+                "supportedFamilies": ["systemSmall", "systemMedium"]
+              }
+            },
+            {
+              "name": "CoupleLocationWidget",
+              "displayName": "Ubicación de mi pareja",
+              "description": "Distancia aproximada y antigüedad de la ubicación",
+              "ios": {
+                "supportedFamilies": ["systemSmall", "systemMedium"]
+              }
+            },
+            {
+              "name": "CoupleEventWidget",
+              "displayName": "Próximo evento",
+              "description": "Días que faltan para vuestra próxima fecha especial",
+              "ios": {
+                "supportedFamilies": ["systemSmall", "systemMedium"]
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "CoupleOverviewWidget",
+              "label": "Resumen de pareja",
+              "description": "Días juntos, racha y pregunta del día",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "CoupleDaysWidget",
+              "label": "Días y rachas",
+              "description": "Días juntos y rachas de ambos",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "CoupleQuestionWidget",
+              "label": "Pregunta y check-in",
+              "description": "La pregunta diaria y el estado del check-in",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "CoupleLocationWidget",
+              "label": "Ubicación de mi pareja",
+              "description": "Distancia aproximada y antigüedad de la ubicación",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "CoupleEventWidget",
+              "label": "Próximo evento",
+              "description": "Días que faltan para vuestra próxima fecha especial",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ]
     ],
     "extra": {
       "eas": {

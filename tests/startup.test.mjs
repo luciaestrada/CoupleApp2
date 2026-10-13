@@ -34,6 +34,11 @@ test('arranque: registra una pantalla aunque falle la carga de un módulo nativo
   const Boundary = () => null;
   evaluate('../index.js', {
     react: React,
+    'react-native': { Platform: { OS: 'ios' } },
+    'expo-constants': {
+      default: { appOwnership: null },
+      AppOwnership: { Expo: 'expo' },
+    },
     expo: { registerRootComponent: root => { registered = root; } },
     './src/components/StartupBoundary': Boundary,
     './App': failure,
@@ -50,6 +55,11 @@ test('arranque: carga la aplicación antes de registrarla para conservar las tar
   let registered;
   evaluate('../index.js', {
     react: React,
+    'react-native': { Platform: { OS: 'ios' } },
+    'expo-constants': {
+      default: { appOwnership: null },
+      AppOwnership: { Expo: 'expo' },
+    },
     expo: { registerRootComponent: root => { registered = root; } },
     './src/components/StartupBoundary': () => null,
     './App': { default: Application },
@@ -98,6 +108,7 @@ test('sesión: un rechazo al recuperar la sesión sale de la carga y expone el e
     '../services/chatService': {},
     '../services/storiesService': {},
     '../persistence/storage': {},
+    '../features/widgets/publishWidgets': { clearWidgetSnapshot: async () => {} },
     '../utils/errors': { asError },
     '../supabase/client': {
       startSupabaseAuthAutoRefresh: () => () => {},
@@ -142,6 +153,7 @@ test('cerrar sesión limpia las colas de esa cuenta aunque fallen los servicios 
     '../services/chatService': { invalidateMessageDelivery: () => { invalidated = true; } },
     '../services/storiesService': { clearStoryFiles: async userId => { clearedFiles = userId; } },
     '../persistence/storage': { clearAccountContent: userId => clearAccountContent(userId, storage) },
+    '../features/widgets/publishWidgets': { clearWidgetSnapshot: async () => {} },
     '../utils/errors': { asError },
     '../supabase/client': { supabase: { auth: { signOut: async () => { signedOut = true; return { error: null }; } } } },
   });

@@ -1,3 +1,8 @@
 <resources>
   <string name="app_name">CoupleApp</string>
+  <string name="widget_coupleoverviewwidget_description" translatable="false">Días juntos, racha y pregunta del día</string>
+  <string name="widget_coupledayswidget_description" translatable="false">Días juntos y rachas de ambos</string>
+  <string name="widget_couplequestionwidget_description" translatable="false">La pregunta diaria y el estado del check-in</string>
+  <string name="widget_couplelocationwidget_description" translatable="false">Distancia aproximada y antigüedad de la ubicación</string>
+  <string name="widget_coupleeventwidget_description" translatable="false">Días que faltan para vuestra próxima fecha especial</string>
 </resources>

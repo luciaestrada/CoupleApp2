@@ -20,6 +20,8 @@ import {
   registerGeofences,
   flushGeofenceEvents,
 } from './src/services/locationTask';
+import { clearWidgetSnapshot } from './src/features/widgets/publishWidgets';
+import { asError } from './src/utils/errors';
 
 function Bootstrap() {
   useEffect(() => startNotificationResponses(() => {}), []);
@@ -33,6 +35,13 @@ function Bootstrap() {
     if (authLoading) return;
     void configureBackgroundNotifications(user?.id ?? null).catch(() => {});
   }, [authLoading, user?.id]);
+  useEffect(() => {
+    if (authLoading || coupleLoading) return;
+    if (user?.id && couple?.members.length === 2) return;
+    void clearWidgetSnapshot().catch((error) => {
+      Alert.alert('Widgets sin actualizar', asError(error).message);
+    });
+  }, [authLoading, coupleLoading, user?.id, couple?.members.length]);
   useEffect(() => {
     if (authLoading || !userProfile?.id) return undefined;
     return startLocalNotifications(userProfile.id);

@@ -1,10 +1,13 @@
 import { asError, type AppError } from '../utils/errors';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { AppState, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePairedAppContext } from '../contexts/AppContext';
 import { sendLove, watchStreaks } from '../services/streakService';
 import { watchUserLocation } from '../services/locationService';
+import { watchCheckins } from '../services/checkinService';
+import { watchDailyQuestion } from '../services/questionService';
+import { watchSpecialDates } from '../services/specialDatesService';
 import { useTracking } from '../context/TrackingContext';
 import { haversineDistanceKm } from '../utils/haversine';
 import { formatSharedDistance } from '../features/location/distanceLabel';
@@ -19,7 +22,10 @@ import { colors } from '../ui/theme';
 import CheckinCard from '../ui/CheckinCard';
 import TodayCard from '../ui/TodayCard';
 import type { NavigationProp, ParamListBase } from '@react-navigation/native';
-import type { SharedLocation } from '../types/domain';
+import type { Row, SharedLocation } from '../types/domain';
+import type { WidgetEvent } from '../features/widgets/types';
+import { createWidgetSnapshot } from '../features/widgets/snapshot';
+import { publishWidgetSnapshot } from '../features/widgets/publishWidgets';
 
 export default function HomeScreen({ navigation }: { navigation: NavigationProp<ParamListBase> }) {
   const { userId, couple, partnerId, userProfile } = usePairedAppContext();
@@ -28,10 +34,14 @@ export default function HomeScreen({ navigation }: { navigation: NavigationProp<
   const [streaks, setStreaks] = useState(couple.streaks ?? []);
   const [mine, setMine] = useState<SharedLocation | null>(null),
     [partner, setPartner] = useState<SharedLocation | null>(null);
+  const [question, setQuestion] = useState<{ prompt: string | null; day: string } | null>(null);
+  const [checkins, setCheckins] = useState<Row<'daily_checkins'>[]>([]);
+  const [specialDates, setSpecialDates] = useState<WidgetEvent[]>([]);
   const [error, setError] = useState<AppError | null>(null),
     [sending, setSending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [showGestures,setShowGestures] = useState(false);
+  const questionDay = todayInMadrid(new Date(now));
   useFocusEffect(useCallback(() => {
     setNow(Date.now());
     const stopStreaks = watchStreaks(couple.id, {
@@ -44,6 +54,19 @@ export default function HomeScreen({ navigation }: { navigation: NavigationProp<
     });
     const stopPartner = watchUserLocation(couple.id, partnerId, {
       onData: setPartner,
+      onError: setError,
+    });
+    const stopCheckins = watchCheckins(couple.id, {
+      onData: setCheckins,
+      onError: setError,
+    });
+    const stopQuestion = watchDailyQuestion(couple.id, questionDay, {
+      onData: (value: { question: { prompt: string } | null }) =>
+        setQuestion({ prompt: value.question?.prompt ?? null, day: questionDay }),
+      onError: setError,
+    });
+    const stopSpecialDates = watchSpecialDates(couple.id, {
+      onData: setSpecialDates,
       onError: setError,
     });
     let timer = AppState.currentState === 'active' ? setInterval(() => setNow(Date.now()), 30000) : undefined;
@@ -59,10 +82,13 @@ export default function HomeScreen({ navigation }: { navigation: NavigationProp<
       stopStreaks();
       stopMine();
       stopPartner();
+      stopCheckins();
+      stopQuestion();
+      stopSpecialDates();
       clearInterval(timer);
       app.remove();
     };
-  }, [couple.id, userId, partnerId]));
+  }, [couple.id, userId, partnerId, questionDay]));
   const myStreak = streaks.find((item) => item.userId === userId);
   const partnerStreak = streaks.find((item) => item.userId === partnerId);
   const sentToday = myStreak?.lastConfirmedDay === todayInMadrid();
@@ -83,6 +109,37 @@ export default function HomeScreen({ navigation }: { navigation: NavigationProp<
         : partner
           ? 'Última ubicación disponible'
           : 'Aún no hay una ubicación compartida';
+  useEffect(() => {
+    const snapshot = createWidgetSnapshot({
+      startDate: couple.startDate,
+      streaks,
+      userId,
+      partnerId,
+      mine,
+      partner,
+      paused,
+      questionPrompt: question?.prompt ?? null,
+      questionDay: question?.day ?? questionDay,
+      checkins,
+      specialDates,
+      now: Date.now(),
+    });
+    void publishWidgetSnapshot(snapshot).catch((nextError) => {
+      setError(asError(nextError));
+    });
+  }, [
+    couple.startDate,
+    streaks,
+    userId,
+    partnerId,
+    mine,
+    partner,
+    paused,
+    question,
+    questionDay,
+    checkins,
+    specialDates,
+  ]);
   async function handleLove(kind = 'love') {
     if (sending) return;
     setSending(true);
